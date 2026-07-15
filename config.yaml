@@ -1,0 +1,89 @@
+audio:
+  # sounddevice 输入设备索引。
+  # null = 首次运行会打印设备列表并使用系统默认输入，建议填入实际索引（CLAUDE.md §8.2）
+  # 运行 `python -m tests.test_recorder_vad` 会打印可用设备列表。
+  input_device_index: null
+  # 输出设备模式：auto / headphone / speaker（CLAUDE.md §8.5）
+  # auto = 启动时根据设备名关键词自动检测，检测失败默认按 speaker 处理
+  output_mode: auto
+  sample_rate: 16000
+
+vad:
+  # 静默监听阈值（0–1）：概率 >= 此值视为有人声（CLAUDE.md §2 VAD 选型）
+  silence_threshold: 0.5
+  # 打断判定阈值——耳机模式（播报不泄漏，可以低一点）
+  interrupt_threshold_headphone: 0.6
+  # 打断判定阈值——外放模式（泄漏严重，必须保守）
+  interrupt_threshold_speaker: 0.85
+  # 连续多少帧 >= threshold 才确认"语音开始"（过滤瞬间噪音）
+  speech_confirm_frames: 3
+  # 连续多少帧 < threshold 才确认"语音结束"（约 480ms @ 32ms/frame）
+  silence_confirm_frames: 15
+  # ─── 打断阈值调优指南（Step 8） ───────────────────────────────────
+  # 症状 → 调整方向：
+  #  - 误触发打断（播报时自己打断自己）：调高 interrupt_threshold_*
+  #  - 打断不灵敏（用户说话后播报不停）：调低 interrupt_threshold_*
+  #  - 键盘声/咳嗽声误触发：调高 speech_confirm_frames（3-4 帧）
+  #  - 打断响应慢（说完话等半秒才停）：调低 speech_confirm_frames（1 帧）
+  # 实测建议：
+  #  - 耳机模式：interrupt_threshold_headphone 0.5-0.7，speech_confirm_frames 2
+  #  - 外放模式：interrupt_threshold_speaker 0.75-0.85，speech_confirm_frames 2-3
+  #  - 极易误触发的笔记本内置麦克风：可调到 0.85/3
+  # 调优依据：日志里的 VAD interrupt triggered 行（prob=X, threshold=Y, consecutive=Z）
+
+asr:
+  # faster-whisper 模型大小：small（约 500MB）/ base / medium / large
+  # 默认 small：base 在安静环境下 CER 不达标（> 10%），已升级（CLAUDE.md §2）
+  model_size: small
+  device: cpu   # cpu / cuda，MVP 固定 cpu
+  compute_type: int8   # CPU 下 int8 最快，质量损失可忽略
+  # 繁简转换：Whisper 中文模型对大陆普通话有时输出繁体字符，用 opencc t2s 字符级转换
+  # true = 启用（推荐）；false = 禁用（仅在排查 opencc 问题时关闭）
+  opencc_enabled: true
+
+llm:
+  # provider 决定实例化哪个 LLMClient 实现（CLAUDE.md §2.1）
+  provider: anthropic           # anthropic / openai
+  model: claude-haiku-4-5-20251001
+  # API Key 从环境变量读取，不写明文（CLAUDE.md §2 API Key 管理）
+  api_key_env: ANTHROPIC_API_KEY
+  # 留空 = 走官方端点；填中转站 URL 时需提前验证 tool use 支持（CLAUDE.md §8.9）
+  # 中转站 URL 只填根域名，SDK 会自动拼接 /v1/messages 路径
+  base_url: "https://cdn.keeps.cc"
+  # 单次请求超时秒数（中转站比官方端点慢，给足时间避免误报超时）
+  # SDK 默认还会重试 2 次，总耗时最多 ≈ timeout × 3 + 退避
+  timeout: 30
+
+tts:
+  voice: zh-CN-XiaoxiaoNeural    # Edge TTS 中文音色
+
+whitelist:
+  # 打开应用放开开关（CLAUDE.md §6 修订 15）：
+  #   true  = 打开任意已安装应用（开始菜单 + App Paths 索引，apps 别名表优先）
+  #   false = 打开也只限 apps 白名单（旧行为）
+  # 关闭应用/命令/文件路径不受此开关影响，始终 100% 白名单强制
+  allow_open_any_app: true
+  # apps 现在是"优先别名表"（修订 15）：用户口语名 → 路径，索引查不到的名字在这里补
+  # （如系统程序 notepad 没有开始菜单快捷方式，中文名"记事本"必须靠别名）
+  apps:
+    chrome: 'C:\Program Files\Google\Chrome\Application\chrome.exe'
+    notepad: 'C:\Windows\System32\notepad.exe'
+    记事本: 'C:\Windows\System32\notepad.exe'
+    浏览器: 'C:\Program Files\Google\Chrome\Application\chrome.exe'
+    计算器: 'C:\Windows\System32\calc.exe'
+  # 每条命令需标注 dangerous: true/false（CLAUDE.md §6）
+  # command 用列表形式传给 subprocess，禁止 shell=True 任意拼接（CLAUDE.md §6 明确禁止）
+  # name 是 RunCommandIntent.command_name 要匹配的键
+  commands:
+    - name: lock_screen
+      command: ['rundll32.exe', 'user32.dll,LockWorkStation']
+      dangerous: false
+    - name: empty_recycle_bin
+      command: ['powershell', '-NoProfile', '-Command', 'Clear-RecycleBin -Force']
+      dangerous: true
+    - name: show_ip
+      command: ['powershell', '-NoProfile', '-Command', '(Get-NetIPAddress -AddressFamily IPv4 -InterfaceAlias Wi-Fi).IPAddress']
+      dangerous: false
+  paths:
+    - "%USERPROFILE%\\Desktop"
+    - "%USERPROFILE%\\Documents"

@@ -1,0 +1,30 @@
+# Voxctl 依赖清单
+# CLAUDE.md §8.1：完成首次安装后执行 `pip freeze > requirements.txt` 锁定完整依赖树。
+# 以下是各 Step 的最小基线版本（宽松约束），首次安装用这个；锁定后替换为精确版本。
+
+# ── Step 3：LLM 意图解析 ──────────────────────────────────────────────────────
+pydantic>=2.7,<3
+anthropic>=0.39,<1
+openai>=1.51,<2
+
+# ── Step 1：录音 + VAD ───────────────────────────────────────────────────────
+numpy>=1.24
+sounddevice>=0.4.6        # 音频录制/播放，基于 PortAudio (CLAUDE.md §8.2)
+onnxruntime>=1.17         # 跑 VAD 的 silero_vad.onnx（修订 21：自研 onnx 运行时，替代 silero-vad/torch）
+# 修订 21 起 VAD 用 onnxruntime + numpy 直跑 vendor 的 audio/silero_vad.onnx（2.3MB，随包走）。
+# 不再依赖 silero-vad 官方包及其 torch/torchaudio 传递依赖——torch 曾占打包 ~470MB，
+# 唯一用途就是跑这个 VAD（faster-whisper 走 CTranslate2、不碰 torch）。见 CLAUDE.md §2 VAD 选型。
+
+# ── Step 2：ASR ──────────────────────────────────────────────────────────────
+faster-whisper>=1.0       # faster-whisper + CTranslate2 做 CPU ASR（CLAUDE.md §2）
+opencc-python-reimplemented>=0.1.7  # 繁→简字符转换（t2s 模式），见 CLAUDE.md §2 ASR 补充说明
+
+# ── Step 4：执行模块 ─────────────────────────────────────────────────────────
+psutil>=5.9               # 系统状态查询（memory/disk/cpu）+ 进程关闭（close_app），CLAUDE.md §5 Step 4
+
+# ── Step 5：TTS ──────────────────────────────────────────────────────────────
+edge-tts>=6.1            # Edge TTS 中文语音合成（CLAUDE.md §2 TTS 选型）
+
+# ── 修订 19：GUI 控制台 ───────────────────────────────────────────────────────
+pywebview>=5,<7          # 原生窗口控制台；Windows 经 pythonnet 驱动 WebView2（系统自带）
+# pywebview 会自动拉 pythonnet / clr_loader / proxy_tools / bottle

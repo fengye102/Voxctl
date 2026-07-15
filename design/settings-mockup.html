@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voxctl — 设置</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        brand:  { DEFAULT: '#FF6B35', deep: '#F04E23' },
+        accent: '#2563EB',
+      },
+      fontFamily: {
+        sans: ['Inter', '"Segoe UI"', '"Microsoft YaHei"', 'system-ui', 'sans-serif'],
+      },
+    }
+  }
+}
+</script>
+<style>
+  /* ── 背景：山景暮色渐变（纯 CSS 分层模拟，离线可用） ───────────────── */
+  .bg-scene {
+    background:
+      /* 顶层薄雾 */
+      radial-gradient(ellipse 120% 60% at 50% -10%, rgba(255,183,120,.35), transparent 60%),
+      /* 远山剪影 */
+      linear-gradient(165deg, transparent 55%, rgba(30,27,75,.55) 56%, rgba(30,27,75,.7) 100%),
+      linear-gradient(195deg, transparent 62%, rgba(49,46,129,.5) 63%, rgba(49,46,129,.65) 100%),
+      /* 暮色天空 */
+      linear-gradient(180deg, #2b1a4e 0%, #6d3a7e 34%, #c65f66 62%, #e8925c 82%, #f2b26b 100%);
+  }
+
+  /* ── range slider：细轨道 + 圆形拖拽点（Tailwind 无法覆盖，手写） ── */
+  input[type="range"] {
+    -webkit-appearance: none; appearance: none;
+    height: 4px; border-radius: 9999px;
+    background: linear-gradient(to right, #2563EB var(--fill, 50%), #E2E8F0 var(--fill, 50%));
+    outline: none; cursor: pointer;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 18px; height: 18px; border-radius: 50%;
+    background: #fff; border: 2px solid #2563EB;
+    box-shadow: 0 1px 4px rgba(37,99,235,.35);
+    transition: transform .15s ease;
+  }
+  input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.15); }
+  input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 4px rgba(37,99,235,.25); }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+  }
+</style>
+</head>
+
+<body class="bg-scene min-h-screen font-sans text-slate-800 antialiased">
+<div class="flex min-h-screen p-4 gap-4">
+
+  <!-- ══════════════ 左侧导航栏（260px，毛玻璃） ══════════════ -->
+  <aside class="w-[260px] shrink-0 flex flex-col rounded-2xl shadow-lg
+                bg-white/20 backdrop-blur-xl border border-white/25 p-5">
+
+    <!-- 头像 + 应用名 -->
+    <div class="flex items-center gap-3 px-1 pb-6">
+      <div class="w-11 h-11 rounded-full bg-gradient-to-br from-brand to-brand-deep
+                  flex items-center justify-center shadow-md">
+        <!-- mic icon -->
+        <svg class="w-5 h-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/>
+        </svg>
+      </div>
+      <div>
+        <div class="font-bold text-white text-[15px] leading-tight drop-shadow-sm">Voxctl</div>
+        <div class="text-[12px] text-white/70">全双工语音助手</div>
+      </div>
+    </div>
+
+    <!-- 导航项 -->
+    <nav class="flex flex-col gap-1.5" aria-label="主导航">
+
+      <!-- 选中：橙色渐变胶囊 -->
+      <a href="#" aria-current="page"
+         class="flex items-center gap-3 h-12 px-4 rounded-full cursor-pointer
+                bg-gradient-to-r from-brand to-brand-deep text-white font-medium
+                shadow-md shadow-orange-900/25 transition duration-200">
+        <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/>
+        </svg>
+        <span class="text-[14px]">语音设置</span>
+      </a>
+
+      <!-- 未选中项 -->
+      <a href="#" class="flex items-center gap-3 h-12 px-4 rounded-full cursor-pointer
+                         text-white/85 hover:bg-white/15 transition duration-200">
+        <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 8V4H8"/><rect x="4" y="8" width="16" height="12" rx="2"/>
+          <path d="M2 14h2"/><path d="M20 14h2"/><path d="M9 13v2"/><path d="M15 13v2"/>
+        </svg>
+        <span class="text-[14px]">大模型配置</span>
+      </a>
+
+      <a href="#" class="flex items-center gap-3 h-12 px-4 rounded-full cursor-pointer
+                         text-white/85 hover:bg-white/15 transition duration-200">
+        <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/>
+          <rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>
+        </svg>
+        <span class="text-[14px]">应用别名</span>
+      </a>
+
+      <a href="#" class="flex items-center gap-3 h-12 px-4 rounded-full cursor-pointer
+                         text-white/85 hover:bg-white/15 transition duration-200">
+        <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/>
+          <path d="M14 2v6h6"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/>
+        </svg>
+        <span class="text-[14px]">审计日志</span>
+      </a>
+
+      <a href="#" class="flex items-center gap-3 h-12 px-4 rounded-full cursor-pointer
+                         text-white/85 hover:bg-white/15 transition duration-200">
+        <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>
+        </svg>
+        <span class="text-[14px]">关于</span>
+      </a>
+    </nav>
+
+    <!-- 底部：服务状态 -->
+    <div class="mt-auto pt-5 border-t border-white/20">
+      <div class="text-[11px] font-semibold text-white/50 uppercase tracking-wider px-1 mb-2.5">服务状态</div>
+      <ul class="flex flex-col gap-2 px-1 text-[12.5px] text-white/85">
+        <li class="flex items-center justify-between">
+          <span>大模型连接</span>
+          <span class="flex items-center gap-1.5 text-emerald-300">在线
+            <span class="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,.9)]" aria-hidden="true"></span>
+          </span>
+        </li>
+        <li class="flex items-center justify-between">
+          <span>语音识别引擎</span>
+          <span class="flex items-center gap-1.5 text-emerald-300">就绪
+            <span class="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,.9)]" aria-hidden="true"></span>
+          </span>
+        </li>
+        <li class="flex items-center justify-between">
+          <span>TTS 合成服务</span>
+          <span class="flex items-center gap-1.5 text-emerald-300">在线
+            <span class="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,.9)]" aria-hidden="true"></span>
+          </span>
+        </li>
+      </ul>
+    </div>
+  </aside>
+
+  <!-- ══════════════ 右侧主内容区 ══════════════ -->
+  <main class="flex-1 flex flex-col min-w-0 py-2 pr-2">
+
+    <!-- 标题区 -->
+    <header class="px-2 pb-6">
+      <h1 class="text-[22px] font-bold text-white drop-shadow-md">语音设置</h1>
+      <p class="text-[13.5px] text-white/70 mt-1">配置音频输入输出、打断灵敏度与播报音色，改动保存后即时生效。</p>
+    </header>
+
+    <!-- 白色圆角卡片 -->
+    <section class="bg-white/95 backdrop-blur-md rounded-2xl shadow-lg p-9 max-w-3xl">
+      <form class="flex flex-col gap-7">
+
+        <!-- 输出模式 -->
+        <div>
+          <label for="output-mode" class="block text-[14px] text-slate-500 font-medium mb-2.5">输出模式</label>
+          <div class="relative max-w-sm">
+            <select id="output-mode"
+                    class="w-full appearance-none bg-white border border-slate-200 rounded-xl
+                           h-11 pl-4 pr-10 text-[14px] text-slate-800 cursor-pointer
+                           hover:border-slate-300 focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent
+                           transition duration-200">
+              <option selected>自动检测（当前：外放）</option>
+              <option>耳机模式</option>
+              <option>外放模式</option>
+            </select>
+            <svg class="w-4 h-4 text-slate-400 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none"
+                 viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="m6 9 6 6 6-6"/>
+            </svg>
+          </div>
+          <p class="text-[12.5px] text-slate-400 mt-2">外放场景下打断判定更保守；插拔耳机后建议重新检测。</p>
+        </div>
+
+        <!-- 输入设备 -->
+        <div>
+          <label for="input-device" class="block text-[14px] text-slate-500 font-medium mb-2.5">麦克风输入设备</label>
+          <div class="relative max-w-sm">
+            <select id="input-device"
+                    class="w-full appearance-none bg-white border border-slate-200 rounded-xl
+                           h-11 pl-4 pr-10 text-[14px] text-slate-800 cursor-pointer
+                           hover:border-slate-300 focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent
+                           transition duration-200">
+              <option selected>麦克风阵列（Realtek Audio）</option>
+              <option>USB 麦克风（Blue Yeti）</option>
+              <option>耳机麦克风（AirPods Pro）</option>
+            </select>
+            <svg class="w-4 h-4 text-slate-400 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none"
+                 viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="m6 9 6 6 6-6"/>
+            </svg>
+          </div>
+        </div>
+
+        <!-- TTS 音色 -->
+        <div>
+          <label for="tts-voice" class="block text-[14px] text-slate-500 font-medium mb-2.5">播报音色</label>
+          <div class="relative max-w-sm">
+            <select id="tts-voice"
+                    class="w-full appearance-none bg-white border border-slate-200 rounded-xl
+                           h-11 pl-4 pr-10 text-[14px] text-slate-800 cursor-pointer
+                           hover:border-slate-300 focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent
+                           transition duration-200">
+              <option selected>晓晓（zh-CN-XiaoxiaoNeural）</option>
+              <option>云希（zh-CN-YunxiNeural)</option>
+              <option>晓伊（zh-CN-XiaoyiNeural）</option>
+            </select>
+            <svg class="w-4 h-4 text-slate-400 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none"
+                 viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="m6 9 6 6 6-6"/>
+            </svg>
+          </div>
+        </div>
+
+        <!-- 分隔线 -->
+        <hr class="border-slate-100">
+
+        <!-- 打断灵敏度滑块 -->
+        <div>
+          <div class="flex items-center justify-between mb-3 max-w-sm">
+            <label for="interrupt-sens" class="text-[14px] text-slate-500 font-medium">打断灵敏度</label>
+            <span id="interrupt-val" class="text-[14px] font-semibold text-accent tabular-nums">+20%</span>
+          </div>
+          <input id="interrupt-sens" type="range" min="-50" max="50" value="20"
+                 class="w-full max-w-sm" style="--fill: 70%"
+                 aria-describedby="interrupt-hint">
+          <p id="interrupt-hint" class="text-[12.5px] text-slate-400 mt-2">调高更容易触发打断，调低可减少播报期间的误触发。</p>
+        </div>
+
+        <!-- 语速滑块 -->
+        <div>
+          <div class="flex items-center justify-between mb-3 max-w-sm">
+            <label for="tts-rate" class="text-[14px] text-slate-500 font-medium">播报语速</label>
+            <span id="rate-val" class="text-[14px] font-semibold text-accent tabular-nums">+10%</span>
+          </div>
+          <input id="tts-rate" type="range" min="-50" max="50" value="10"
+                 class="w-full max-w-sm" style="--fill: 60%">
+        </div>
+
+        <!-- 底部操作栏 -->
+        <div class="flex items-center justify-between pt-3 border-t border-slate-100">
+          <!-- 状态提示胶囊 -->
+          <div class="flex items-center gap-2 bg-emerald-50 text-emerald-600 rounded-full pl-3 pr-4 h-9 text-[13px] font-medium"
+               role="status">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M20 6 9 17l-5-5"/>
+            </svg>
+            所有更改已保存
+          </div>
+
+          <!-- 按钮组 -->
+          <div class="flex items-center gap-3">
+            <button type="button"
+                    class="h-10 px-5 rounded-xl border border-slate-200 text-slate-600 text-[14px] font-medium
+                           cursor-pointer hover:bg-slate-50 hover:border-slate-300
+                           focus:outline-none focus:ring-2 focus:ring-slate-300
+                           transition duration-200">
+              恢复默认
+            </button>
+            <button type="submit"
+                    class="h-10 px-6 rounded-xl bg-accent text-white text-[14px] font-medium shadow-md shadow-blue-600/25
+                           cursor-pointer hover:bg-blue-700 active:scale-[.98]
+                           focus:outline-none focus:ring-2 focus:ring-accent/50 focus:ring-offset-2
+                           transition duration-200">
+              保存设置
+            </button>
+          </div>
+        </div>
+
+      </form>
+    </section>
+  </main>
+</div>
+
+<script>
+// 滑块：实时更新数值高亮与轨道填充
+function bindSlider(sliderId, valId) {
+  const s = document.getElementById(sliderId), v = document.getElementById(valId);
+  if (!s || !v) return;
+  s.addEventListener('input', () => {
+    const n = parseInt(s.value, 10);
+    v.textContent = (n >= 0 ? '+' : '') + n + '%';
+    const pct = ((n - s.min) / (s.max - s.min)) * 100;
+    s.style.setProperty('--fill', pct + '%');
+  });
+}
+bindSlider('interrupt-sens', 'interrupt-val');
+bindSlider('tts-rate', 'rate-val');
+</script>
+</body>
+</html>

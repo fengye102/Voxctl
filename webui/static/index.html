@@ -1,0 +1,814 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VOXCTL 控制台</title>
+<style>
+/* ═══════════════════════════════════════════════════════════════════
+   修订 22：亮色毛玻璃视觉（design/settings-mockup.html 为视觉基准）
+   约束：离线自足——无 CDN、无 webfont、无图片资产，背景纯 CSS 渐变。
+   ═══════════════════════════════════════════════════════════════════ */
+:root {
+  --brand: #FF6B35;          /* 主色橙：导航选中态 */
+  --brand-deep: #F04E23;
+  --accent: #2563EB;         /* 强调蓝：主按钮 / 数值高亮 */
+  --accent-deep: #1D4ED8;
+  --ok: #059669;             /* 成功绿 */
+  --ok-dot: #34D399;
+  --danger: #DC2626;
+  --ink: #1E293B;            /* 标题近黑 */
+  --ink-mid: #64748B;        /* 正文中灰 */
+  --ink-dim: #94A3B8;        /* 说明浅灰 */
+  --line: #E2E8F0;
+  --card: rgba(255,255,255,.95);
+  --body: 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', system-ui, sans-serif;
+  --mono: 'Cascadia Mono', 'Consolas', monospace;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,.4); border-radius: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+body {
+  min-height: 100vh;
+  font-family: var(--body);
+  color: var(--ink);
+  overflow-x: hidden;
+  /* 山景暮色渐变（纯 CSS 分层：薄雾 + 远山剪影 + 暮色天空） */
+  background:
+    radial-gradient(ellipse 120% 60% at 50% -10%, rgba(255,183,120,.35), transparent 60%),
+    linear-gradient(165deg, transparent 55%, rgba(30,27,75,.55) 56%, rgba(30,27,75,.7) 100%),
+    linear-gradient(195deg, transparent 62%, rgba(49,46,129,.5) 63%, rgba(49,46,129,.65) 100%),
+    linear-gradient(180deg, #2b1a4e 0%, #6d3a7e 34%, #c65f66 62%, #e8925c 82%, #f2b26b 100%);
+  background-attachment: fixed;
+}
+
+.layout {
+  display: flex; gap: 16px;
+  max-width: 1280px; margin: 0 auto;
+  min-height: 100vh; padding: 16px;
+}
+@media (max-width: 900px) {
+  .layout { flex-direction: column; }
+  .rail { width: 100% !important; position: static !important; height: auto !important; }
+}
+
+/* ───── 左侧导航栏：毛玻璃 ───── */
+.rail {
+  width: 260px; flex-shrink: 0;
+  display: flex; flex-direction: column; gap: 24px;
+  background: rgba(255,255,255,.2);
+  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255,255,255,.25);
+  border-radius: 16px;
+  box-shadow: 0 10px 30px rgba(0,0,0,.18);
+  padding: 22px 18px;
+  position: sticky; top: 16px;
+  height: calc(100vh - 32px);
+}
+.brand { display: flex; align-items: center; gap: 12px; padding: 0 6px; }
+.brand .avatar {
+  width: 44px; height: 44px; border-radius: 50%;
+  background: linear-gradient(135deg, var(--brand), var(--brand-deep));
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 4px 12px rgba(240,78,35,.35);
+}
+.brand .avatar svg { width: 20px; height: 20px; color: #fff; }
+.brand h1 { font-size: 16px; font-weight: 700; color: #fff; line-height: 1.2;
+  text-shadow: 0 1px 3px rgba(0,0,0,.25); }
+.brand .sub { font-size: 12px; color: rgba(255,255,255,.7); margin-top: 2px; }
+
+/* 导航项（沿用 .tabbar button 选择器，JS 零改动） */
+.tabbar { display: flex; flex-direction: column; gap: 6px; }
+.tabbar button {
+  display: flex; align-items: center; gap: 12px;
+  height: 48px; padding: 0 16px;
+  border: none; border-radius: 9999px;
+  background: transparent; color: rgba(255,255,255,.85);
+  font-family: var(--body); font-size: 14px; font-weight: 500;
+  cursor: pointer; text-align: left;
+  transition: background .2s, color .2s, box-shadow .2s;
+}
+.tabbar button svg { width: 20px; height: 20px; flex-shrink: 0; }
+.tabbar button:hover { background: rgba(255,255,255,.15); }
+.tabbar button.active {
+  background: linear-gradient(90deg, var(--brand), var(--brand-deep));
+  color: #fff;
+  box-shadow: 0 4px 14px rgba(180,50,10,.3);
+}
+.tabbar button:focus-visible { outline: 2px solid rgba(255,255,255,.7); outline-offset: 2px; }
+
+/* 侧栏底部：服务状态 */
+.rail .status-block { margin-top: auto; border-top: 1px solid rgba(255,255,255,.2); padding-top: 16px; }
+.rail .status-title {
+  font-size: 11px; font-weight: 600; letter-spacing: 1.5px; text-transform: uppercase;
+  color: rgba(255,255,255,.5); padding: 0 6px; margin-bottom: 10px;
+}
+.stats { display: flex; flex-direction: column; gap: 8px; padding: 0 6px; }
+.stat { display: flex; justify-content: space-between; align-items: center;
+  font-size: 12.5px; color: rgba(255,255,255,.85); }
+.stat .v { font-family: var(--mono); font-size: 12.5px; font-weight: 600; color: #fff; }
+.stat .v.small { font-size: 11.5px; font-weight: 500; }
+.led-row { display: flex; align-items: center; justify-content: space-between; gap: 9px;
+  padding: 0 6px; margin-bottom: 8px;
+  font-size: 12.5px; color: rgba(255,255,255,.85); }
+.led { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+  background: var(--ok-dot); box-shadow: 0 0 6px rgba(52,211,153,.9); }
+.led.err { background: #F87171; box-shadow: 0 0 6px rgba(248,113,113,.9); }
+.led.off { background: rgba(255,255,255,.35); box-shadow: none; }
+#led-text { font-size: 11px; color: rgba(255,255,255,.6); letter-spacing: .5px; }
+
+.rail .foot {
+  font-size: 10.5px; color: rgba(255,255,255,.5); line-height: 1.9;
+  padding: 12px 6px 0; border-top: 1px solid rgba(255,255,255,.15); margin-top: 14px;
+}
+.rail .foot b { color: rgba(255,255,255,.75); font-weight: 600; }
+
+/* ───── 右侧主内容区 ───── */
+.main { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 8px 4px; }
+
+.page-head { padding: 4px 6px 20px; }
+.page-head h2 { font-size: 22px; font-weight: 700; color: #fff;
+  text-shadow: 0 1px 4px rgba(0,0,0,.3); }
+.page-head p { font-size: 13.5px; color: rgba(255,255,255,.7); margin-top: 4px; }
+
+.tab-page { display: none; flex-direction: column; gap: 18px; }
+.tab-page.active { display: flex; }
+
+/* 白色圆角卡片 */
+.panel {
+  background: var(--card);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  border-radius: 16px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.14);
+  padding: 28px 32px;
+  opacity: 0; transform: translateY(14px);
+  animation: reveal .45s cubic-bezier(.2,.7,.3,1) forwards;
+}
+.tab-page.active .panel:nth-child(2){animation-delay:.08s}
+.tab-page.active .panel:nth-child(3){animation-delay:.16s}
+.tab-page.active .panel:nth-child(4){animation-delay:.24s}
+@keyframes reveal { to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+  .panel { opacity: 1; transform: none; }
+}
+
+.panel-head { display: flex; align-items: baseline; gap: 12px;
+  border-bottom: 1px solid #F1F5F9; padding-bottom: 14px; margin-bottom: 20px; }
+.panel-head h2 { font-size: 16px; font-weight: 700; color: var(--ink); }
+.panel-head .hint { margin-left: auto; font-size: 12px; color: var(--ink-dim); }
+
+/* 表单控件 */
+.form-row { display: grid; grid-template-columns: 180px 1fr auto; gap: 12px; }
+@media (max-width: 720px) { .form-row { grid-template-columns: 1fr; } }
+input[type=text], input[type=password], select {
+  background: #fff; border: 1px solid var(--line); border-radius: 12px;
+  color: var(--ink); font-family: var(--body); font-size: 14px;
+  height: 44px; padding: 0 14px; outline: none;
+  transition: border-color .2s, box-shadow .2s;
+}
+input::placeholder { color: #A8B3C4; }
+input:hover, select:hover { border-color: #CBD5E1; }
+input:focus, select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(37,99,235,.18);
+}
+select { cursor: pointer; -webkit-appearance: none; appearance: none;
+  padding-right: 36px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2394A3B8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 12px center;
+}
+select option { background: #fff; color: var(--ink); }
+
+/* 按钮 */
+.btn {
+  font-family: var(--body); font-size: 14px; font-weight: 500;
+  background: var(--accent); color: #fff;
+  border: 1px solid transparent; border-radius: 12px;
+  height: 44px; padding: 0 22px; cursor: pointer; white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(37,99,235,.25);
+  transition: background .2s, box-shadow .2s, transform .1s;
+}
+.btn:hover { background: var(--accent-deep); }
+.btn:active { transform: scale(.98); }
+.btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.btn.ghost {
+  background: transparent; color: var(--ink-mid);
+  border-color: var(--line); box-shadow: none; font-weight: 500;
+}
+.btn.ghost:hover { background: #F8FAFC; border-color: #CBD5E1; color: var(--ink); }
+.btn.danger {
+  background: transparent; color: var(--danger);
+  border-color: #FECACA; box-shadow: none;
+  height: 34px; padding: 0 14px; font-size: 13px;
+}
+.btn.danger:hover { background: #FEF2F2; border-color: #FCA5A5; }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn:disabled:hover { background: var(--accent); }
+.btn.ghost:disabled:hover { background: transparent; color: var(--ink-mid); }
+.btn.danger:disabled:hover { background: transparent; }
+/* 全尺寸 danger 按钮（语音停止，不压缩 height/padding） */
+.btn.stop {
+  background: transparent; color: var(--danger);
+  border-color: #FECACA; box-shadow: none;
+}
+.btn.stop:hover { background: #FEF2F2; border-color: #FCA5A5; }
+.btn.stop:disabled:hover { background: transparent; }
+/* 小号按钮（表格行内操作 / 刷新） */
+.btn.sm { height: 36px; padding: 0 16px; font-size: 13px; }
+/* 语音控制按钮组：推到右侧 */
+.btn-group { margin-left: auto; display: flex; gap: 10px; }
+.save-row > .form-note { margin-top: 0; }
+/* 解析面板 form-row 列宽覆盖 */
+.form-row.resolve { grid-template-columns: 1fr auto auto; }
+/* 表格列宽 */
+.tbl-name-col { width: 170px; }
+.tbl-src-col  { width: 90px; }
+.tbl-act-col  { width: 70px; }
+/* 审计日志刷新按钮：推到右侧 */
+.panel-head .btn-log { margin-left: auto; }
+
+.form-note { margin-top: 12px; font-size: 12.5px; color: var(--ink-dim); line-height: 1.8; }
+.form-note b { color: var(--ink-mid); font-weight: 600; }
+.form-note b.warn { color: var(--danger); }
+
+/* 设置表单：标签 + 输入两列 */
+.set-grid { display: grid; grid-template-columns: 110px 1fr; gap: 18px 16px; align-items: center; }
+@media (max-width: 720px) { .set-grid { grid-template-columns: 1fr; gap: 8px 0; } }
+.set-grid label { font-size: 14px; color: var(--ink-mid); font-weight: 500; }
+.set-grid .field { display: flex; align-items: center; gap: 10px; }
+.set-grid .field input, .set-grid .field select { flex: 1; }
+.ovr {
+  font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 9999px;
+  background: #FFF3EC; color: var(--brand-deep); white-space: nowrap;
+}
+.keyhint { font-size: 12px; color: var(--ink-dim); white-space: nowrap; }
+
+/* 语音运行控制 */
+.run-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.run-state {
+  display: flex; align-items: center; gap: 10px;
+  background: #F8FAFC; border: 1px solid #F1F5F9; border-radius: 9999px;
+  height: 40px; padding: 0 18px 0 14px;
+  font-size: 13.5px; font-weight: 500; color: var(--ink-mid);
+}
+.run-state .led { width: 9px; height: 9px; }
+.run-state .led.off { background: #CBD5E1; }
+
+/* 解析结果卡 */
+.resolve-out { margin-top: 16px; min-height: 20px; }
+.rcard {
+  border-left: 3px solid var(--accent); background: #F8FAFC;
+  padding: 14px 18px; border-radius: 0 12px 12px 0;
+  font-size: 13.5px; line-height: 2;
+  animation: reveal .3s ease forwards;
+}
+.rcard.miss { border-left-color: var(--danger); }
+.rcard .tag {
+  display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 10px;
+  border-radius: 9999px; background: #EFF6FF; color: var(--accent); margin-right: 10px;
+}
+.rcard.miss .tag { background: #FEF2F2; color: var(--danger); }
+.rcard .path { font-family: var(--mono); font-size: 12px; color: var(--ink-dim); word-break: break-all; }
+
+/* 别名表 */
+table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+th { font-size: 12px; font-weight: 600; color: var(--ink-dim);
+  text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+td { padding: 10px; border-bottom: 1px solid #F1F5F9; vertical-align: middle; }
+tr:hover td { background: #F8FAFC; }
+td.name { font-weight: 600; color: var(--ink); white-space: nowrap; }
+td.path { font-family: var(--mono); font-size: 12px; color: var(--ink-dim); word-break: break-all; }
+.src {
+  font-size: 10.5px; font-weight: 600; letter-spacing: .5px; padding: 3px 10px;
+  border-radius: 9999px; white-space: nowrap;
+}
+.src.cfg { background: #F1F5F9; color: var(--ink-mid); }
+.src.usr { background: #FFF3EC; color: var(--brand-deep); }
+.empty { padding: 24px 10px; text-align: center; font-size: 13px; color: var(--ink-dim); }
+
+/* 审计日志 */
+.log { background: #F8FAFC; border: 1px solid #F1F5F9; border-radius: 12px;
+  max-height: 380px; overflow-y: auto; padding: 4px 0;
+  font-family: var(--mono); font-size: 12px; }
+.log::-webkit-scrollbar { width: 8px; }
+.log::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+.logline { padding: 7px 16px; display: flex; gap: 14px; align-items: baseline;
+  border-bottom: 1px solid #F1F5F9; line-height: 1.7; }
+.logline:last-child { border-bottom: none; }
+.logline .t { color: var(--ink-dim); white-space: nowrap; }
+.logline .act { color: var(--accent); font-weight: 600; min-width: 92px; }
+.logline .txt { color: var(--ink-mid); word-break: break-all; }
+.logline .st { margin-left: auto; white-space: nowrap; font-weight: 600; }
+.st.ok { color: var(--ok); } .st.fail { color: var(--danger); }
+
+/* toast */
+#toast {
+  position: fixed; top: 24px; right: 24px; z-index: 1000;
+  display: flex; flex-direction: column; gap: 10px; pointer-events: none;
+}
+.toast {
+  background: #fff; border: 1px solid var(--line);
+  border-left: 4px solid var(--ok);
+  color: var(--ink); font-size: 13px;
+  padding: 13px 18px; border-radius: 12px; max-width: 420px;
+  box-shadow: 0 10px 30px rgba(0,0,0,.18);
+  animation: toastIn .25s cubic-bezier(.2,.7,.3,1);
+}
+.toast.err { border-left-color: var(--danger); }
+@keyframes toastIn { from { opacity: 0; transform: translateX(30px); } }
+</style>
+</head>
+<body>
+<div id="toast"></div>
+<div class="layout">
+
+  <aside class="rail">
+    <div class="brand">
+      <div class="avatar" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/>
+        </svg>
+      </div>
+      <div>
+        <h1>Voxctl</h1>
+        <div class="sub">全双工语音助手</div>
+      </div>
+    </div>
+
+    <nav class="tabbar" aria-label="主导航">
+      <button type="button" data-tab="voice" class="active">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/>
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/>
+        </svg>
+        语音控制
+      </button>
+      <button type="button" data-tab="llm">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 8V4H8"/><rect x="4" y="8" width="16" height="12" rx="2"/>
+          <path d="M2 14h2"/><path d="M20 14h2"/><path d="M9 13v2"/><path d="M15 13v2"/>
+        </svg>
+        大模型配置
+      </button>
+      <button type="button" data-tab="apps">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/>
+          <rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>
+        </svg>
+        应用别名
+      </button>
+      <button type="button" data-tab="log">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/>
+          <path d="M14 2v6h6"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="13" y2="17"/>
+        </svg>
+        审计日志
+      </button>
+    </nav>
+
+    <div class="status-block">
+      <div class="status-title">服务状态</div>
+      <div class="led-row"><span id="led-text">NATIVE CONSOLE · READY</span><span class="led" id="led"></span></div>
+      <div class="stats">
+        <div class="stat"><span>索引应用</span><span class="v" id="st-index">–</span></div>
+        <div class="stat"><span>用户别名</span><span class="v" id="st-user">–</span></div>
+        <div class="stat"><span>CONFIG 别名</span><span class="v" id="st-cfg">–</span></div>
+        <div class="stat"><span>打开范围</span><span class="v small" id="st-scope">–</span></div>
+      </div>
+      <div class="foot">
+        <b>边界</b>：本台仅注册别名、打开应用、改 LLM 配置、启停语音。关闭 / 删除 / 命令仅语音 + 二次确认。
+      </div>
+    </div>
+  </aside>
+
+  <main class="main">
+
+    <!-- ═══════ 语音控制 ═══════ -->
+    <div class="tab-page active" id="tab-voice">
+      <div class="page-head">
+        <h2>语音控制</h2>
+        <p>启动或停止语音助手子进程；改了配置或别名后，停止再启动即生效。</p>
+      </div>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>语音交互</h2>
+          <span class="hint">独立子进程</span>
+        </div>
+        <div class="run-row">
+          <div class="run-state"><span class="led off" id="voice-led"></span><span id="voice-text">语音助手：查询中…</span></div>
+          <div class="btn-group">
+            <button type="button" class="btn" id="voice-start">启动语音</button>
+            <button type="button" class="btn stop" id="voice-stop">停止语音</button>
+          </div>
+        </div>
+        <div class="form-note">
+          启动会拉起独立的语音子进程（无黑窗）；说「退出程序」或点「停止语音」都能结束它。
+          识别活动见「审计日志」页。
+        </div>
+      </section>
+    </div>
+
+    <!-- ═══════ 大模型配置 ═══════ -->
+    <div class="tab-page" id="tab-llm">
+      <div class="page-head">
+        <h2>大模型配置</h2>
+        <p>覆盖写入 <b>voxctl.local.yaml</b>，不改 <b>config.yaml</b>；语音助手重启后生效。</p>
+      </div>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>LLM 设置</h2>
+          <span class="hint">写入 voxctl.local.yaml · 覆盖 config</span>
+        </div>
+        <div class="set-grid">
+          <label for="set-provider">provider</label>
+          <div class="field">
+            <select id="set-provider">
+              <option value="anthropic">anthropic</option>
+              <option value="openai">openai</option>
+            </select>
+            <span class="ovr" id="ovr-provider" hidden>已覆盖</span>
+          </div>
+
+          <label for="set-model">LLM 模型</label>
+          <div class="field">
+            <input type="text" id="set-model" list="llm-model-list" placeholder="选择或输入模型标识（中转站别名可自由填）">
+            <datalist id="llm-model-list">
+              <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
+              <option value="claude-sonnet-5">Claude Sonnet 5</option>
+              <option value="claude-opus-4-8">Claude Opus 4.8</option>
+              <option value="claude-fable-5">Claude Fable 5</option>
+              <option value="gpt-4o">GPT-4o</option>
+              <option value="gpt-4o-mini">GPT-4o mini</option>
+            </datalist>
+            <span class="ovr" id="ovr-model" hidden>已覆盖</span>
+          </div>
+
+          <label for="set-asr-model">ASR 模型</label>
+          <div class="field">
+            <select id="set-asr-model">
+              <option value="tiny">tiny（最快，最不准）</option>
+              <option value="base">base</option>
+              <option value="small" selected>small（默认，推荐）</option>
+              <option value="medium">medium</option>
+              <option value="large-v3">large-v3（最准，最慢）</option>
+            </select>
+            <span class="ovr" id="ovr-asr" hidden>已覆盖</span>
+          </div>
+
+          <label for="set-tts-voice">TTS 音色</label>
+          <div class="field">
+            <select id="set-tts-voice">
+              <option value="zh-CN-XiaoxiaoNeural">晓晓 · 女声（默认）</option>
+              <option value="zh-CN-XiaoyiNeural">晓伊 · 女声</option>
+              <option value="zh-CN-XiaomengNeural">晓梦 · 女声</option>
+              <option value="zh-CN-YunxiNeural">云希 · 男声</option>
+              <option value="zh-CN-YunjianNeural">云健 · 男声</option>
+              <option value="zh-CN-YunyangNeural">云扬 · 男声</option>
+            </select>
+            <span class="ovr" id="ovr-tts" hidden>已覆盖</span>
+          </div>
+
+          <label for="set-baseurl">base_url</label>
+          <div class="field">
+            <input type="text" id="set-baseurl" placeholder="如 https://cdn.keeps.cc（留空走官方端点）">
+            <span class="ovr" id="ovr-base_url" hidden>已覆盖</span>
+          </div>
+
+          <label for="set-apikey">api_key</label>
+          <div class="field">
+            <input type="password" id="set-apikey" placeholder="留空 = 不修改现有 key">
+            <span class="keyhint" id="key-hint"></span>
+          </div>
+        </div>
+        <div class="save-row">
+          <button type="button" class="btn" id="set-save">保存配置</button>
+          <span class="form-note">配置写入 <b>voxctl.local.yaml</b>，语音助手<b>重启后</b>生效。</span>
+        </div>
+        <div class="form-note">
+          api_key 明文存本地文件（随程序文件夹走，<b class="warn">勿分享 / 勿传 git</b>）。key 不写进 config.yaml。
+        </div>
+      </section>
+    </div>
+
+    <!-- ═══════ 应用别名 ═══════ -->
+    <div class="tab-page" id="tab-apps">
+      <div class="page-head">
+        <h2>应用别名</h2>
+        <p>注册「应用名 → 可执行文件」映射供语音端使用；解析规则为确定性匹配，不做模糊放行。</p>
+      </div>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>注册应用</h2>
+          <span class="hint">应用名 → EXE / LNK 绝对路径</span>
+        </div>
+        <div class="form-row">
+          <input type="text" id="reg-name" placeholder="应用名（如：我的工具）" maxlength="50">
+          <input type="text" id="reg-path" placeholder='可执行文件路径（如 D:\Tools\mytool.exe）'>
+          <button type="button" class="btn" id="reg-btn">注册</button>
+        </div>
+        <div class="form-note">
+          注册后可在下方直接测试打开；语音端说「打开 应用名」需<b>重启语音助手</b>后生效。
+          config.yaml 中已有的名字不可覆盖。
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>解析 · 打开</h2>
+          <span class="hint">白名单 → 索引，确定性匹配</span>
+        </div>
+        <div class="form-row resolve">
+          <input type="text" id="res-q" placeholder="输入应用名试试（微信 / chrome / 记事本…）">
+          <button type="button" class="btn ghost" id="res-btn">解析</button>
+          <button type="button" class="btn" id="open-btn">打开</button>
+        </div>
+        <div class="resolve-out" id="res-out"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>别名表</h2>
+          <span class="hint" id="tbl-count"></span>
+        </div>
+        <table>
+          <thead><tr><th class="tbl-name-col">应用名</th><th>目标路径</th><th class="tbl-src-col">来源</th><th class="tbl-act-col"></th></tr></thead>
+          <tbody id="tbl-body"></tbody>
+        </table>
+      </section>
+    </div>
+
+    <!-- ═══════ 审计日志 ═══════ -->
+    <div class="tab-page" id="tab-log">
+      <div class="page-head">
+        <h2>审计日志</h2>
+        <p>每一次执行动作与打断事件的完整记录，排查误触发的唯一依据。</p>
+      </div>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>最近记录</h2>
+          <button type="button" class="btn ghost btn-log sm" id="log-btn">刷新</button>
+        </div>
+        <div class="log" id="log-box"><div class="empty">载入中…</div></div>
+      </section>
+    </div>
+
+  </main>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function toast(msg, isErr = false, ms = 3200) {
+  const el = document.createElement('div');
+  el.className = 'toast' + (isErr ? ' err' : '');
+  el.textContent = msg;
+  $('toast').appendChild(el);
+  setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity .3s'; }, ms);
+  setTimeout(() => el.remove(), ms + 400);
+}
+
+// PyWebView js_api 桥（无 http，无 fetch）。所有调用走 window.pywebview.api.<method>()。
+const API = () => (window.pywebview && window.pywebview.api) || null;
+
+/* ── 状态 + 别名表 ── */
+async function refreshState() {
+  const api = API(); if (!api) return;
+  try {
+    const s = await api.get_state();
+    $('st-index').textContent = s.index_count;
+    $('st-user').textContent = Object.keys(s.user_apps).length;
+    $('st-cfg').textContent = Object.keys(s.config_apps).length;
+    $('st-scope').textContent = s.index_enabled ? '全机应用' : '仅白名单';
+    $('led').className = 'led';
+    $('led-text').textContent = 'NATIVE CONSOLE · READY';
+    renderTable(s);
+  } catch (e) {
+    $('led').className = 'led err';
+    $('led-text').textContent = 'CONSOLE ERROR';
+  }
+}
+
+function renderTable(s) {
+  const rows = [];
+  for (const [name, path] of Object.entries(s.user_apps))
+    rows.push({name, path, src: 'usr'});
+  for (const [name, path] of Object.entries(s.config_apps))
+    rows.push({name, path, src: 'cfg'});
+  $('tbl-count').textContent = rows.length + ' 条';
+  if (!rows.length) {
+    $('tbl-body').innerHTML = '<tr><td colspan="4" class="empty">暂无别名 —— 在上方「注册应用」添加第一条</td></tr>';
+    return;
+  }
+  $('tbl-body').innerHTML = rows.map(r => `
+    <tr>
+      <td class="name">${esc(r.name)}</td>
+      <td class="path">${esc(r.path)}</td>
+      <td><span class="src ${r.src}">${r.src === 'usr' ? 'USER' : 'CONFIG'}</span></td>
+      <td>${r.src === 'usr' ? `<button type="button" class="btn danger sm" data-del="${esc(r.name)}">删除</button>` : ''}</td>
+    </tr>`).join('');
+}
+
+document.addEventListener('click', async e => {
+  const name = e.target?.dataset?.del;
+  if (!name) return;
+  const api = API(); if (!api) return;
+  if (!confirm(`删除别名「${name}」？（不影响已安装应用本身）`)) return;
+  const r = await api.delete_alias(name);
+  r.ok ? toast(`已删除别名：${name}`) : toast(r.error, true);
+  refreshState();
+});
+
+/* ── 注册 ── */
+async function register() {
+  const api = API(); if (!api) return;
+  const name = $('reg-name').value.trim(), path = $('reg-path').value.trim();
+  if (!name || !path) { toast('应用名和路径都要填', true); return; }
+  const r = await api.add_alias(name, path);
+  if (r.ok) {
+    toast(`已注册：${name}（语音端重启后生效）`);
+    $('reg-name').value = ''; $('reg-path').value = '';
+    $('res-q').value = name;
+    refreshState();
+  } else toast(r.error, true);
+}
+
+/* ── 解析 / 打开 ── */
+async function resolve() {
+  const api = API(); if (!api) return;
+  const q = $('res-q').value.trim();
+  if (!q) return;
+  const r = await api.resolve(q);
+  let html;
+  if (r.status === 'found') {
+    html = `<div class="rcard"><span class="tag">${r.resolved_via === 'whitelist' ? '别名表' : '索引'}</span>
+      <b>${esc(r.display_name)}</b><br><span class="path">${esc(r.target)}</span></div>`;
+  } else if (r.status === 'ambiguous') {
+    html = `<div class="rcard miss"><span class="tag">多个匹配</span>请说得更具体：<br>
+      <span class="path">${(r.candidates || []).map(esc).join(' ・ ')}</span></div>`;
+  } else {
+    html = `<div class="rcard miss"><span class="tag">未找到</span>「${esc(q)}」不在别名表和索引里 —— 可在上方注册</div>`;
+  }
+  $('res-out').innerHTML = html;
+}
+async function openApp() {
+  const api = API(); if (!api) return;
+  const q = $('res-q').value.trim();
+  if (!q) { toast('先输入应用名', true); return; }
+  const r = await api.open_app(q);
+  if (r.ok) toast(`已打开：${(r.payload && r.payload.app_name) ?? q}`);
+  else toast(r.error || '打开失败', true);
+  resolve();
+  setTimeout(refreshLog, 600);
+}
+
+/* ── 审计日志 ── */
+async function refreshLog() {
+  const api = API(); if (!api) return;
+  const r = await api.get_log(30);
+  if (!r.entries?.length) {
+    $('log-box').innerHTML = '<div class="empty">暂无记录</div>'; return;
+  }
+  $('log-box').innerHTML = r.entries.map(e => {
+    const t = (e.timestamp || '').replace('T', ' ');
+    const act = e.event === 'interrupt' ? 'INTERRUPT' : (e.action_type || '?');
+    const txt = e.event === 'interrupt'
+      ? `打断 · 前状态 ${e.before_state}${e.cancelled_exit ? ' · 取消了退出' : ''}`
+      : (e.raw_text || '');
+    const ok = e.event === 'interrupt' ? null : !!e.success;
+    return `<div class="logline"><span class="t">${esc(t)}</span><span class="act">${esc(act)}</span>
+      <span class="txt">${esc(txt)}</span>
+      ${ok === null ? '' : `<span class="st ${ok ? 'ok' : 'fail'}">${ok ? 'OK' : 'FAIL'}</span>`}</div>`;
+  }).join('');
+}
+
+/* ── LLM / ASR / TTS 设置 ── */
+// 若生效值不在 select 预置选项里（如 config 用了列表外的音色），临时补一个 option，
+// 避免 select.value 静默落空、界面显示成第一项与真实值不符。
+function ensureOption(sel, value) {
+  if (!value) return;
+  if (![...sel.options].some(o => o.value === value)) {
+    const o = document.createElement('option');
+    o.value = value; o.textContent = value + '（当前）';
+    sel.appendChild(o);
+  }
+  sel.value = value;
+}
+async function loadSettings() {
+  const api = API(); if (!api) return;
+  try {
+    const s = await api.get_settings();
+    $('set-provider').value = s.provider || 'anthropic';
+    $('set-model').value = s.model || '';
+    $('set-baseurl').value = s.base_url || '';
+    $('set-apikey').value = '';
+    $('key-hint').textContent = s.has_local_key ? '已设置（留空则不改）' : '未设置';
+    ensureOption($('set-asr-model'), s.asr_model || 'small');
+    ensureOption($('set-tts-voice'), s.tts_voice || 'zh-CN-XiaoxiaoNeural');
+    const ovr = new Set(s.overridden || []);
+    ['provider', 'model', 'base_url'].forEach(f => {
+      $('ovr-' + f).hidden = !ovr.has(f);
+    });
+    $('ovr-asr').hidden = !(s.asr_overridden || []).includes('model_size');
+    $('ovr-tts').hidden = !(s.tts_overridden || []).includes('voice');
+    updateVoiceLed(s.voice_running);
+  } catch (e) { toast('读取配置失败', true); }
+}
+async function saveSettings() {
+  const api = API(); if (!api) return;
+  const provider = $('set-provider').value;
+  const model = $('set-model').value.trim();
+  const baseUrl = $('set-baseurl').value.trim();
+  const apiKey = $('set-apikey').value;
+  const asrModel = $('set-asr-model').value;
+  const ttsVoice = $('set-tts-voice').value;
+  const r = await api.save_settings(provider, model, baseUrl, apiKey, asrModel, ttsVoice);
+  if (r.ok) { toast('已保存，语音助手重启后生效'); loadSettings(); }
+  else toast(r.error || '保存失败', true);
+}
+
+/* ── 语音启停 ── */
+let voicePoll = null;
+function updateVoiceLed(running) {
+  $('voice-led').className = running ? 'led' : 'led off';
+  $('voice-text').textContent = running ? '语音助手：运行中' : '语音助手：已停止';
+  $('voice-start').disabled = !!running;
+  $('voice-stop').disabled = !running;
+}
+async function pollVoice() {
+  const api = API(); if (!api) return;
+  try {
+    const s = await api.voice_status();
+    updateVoiceLed(s.running);
+    if (s.crashed && s.error) toast(s.error, true, 8000);  // 意外崩溃：显式告知原因（修订 20）
+  } catch (e) {}
+}
+function startVoicePoll() { pollVoice(); if (!voicePoll) voicePoll = setInterval(pollVoice, 3000); }
+function stopVoicePoll() { if (voicePoll) { clearInterval(voicePoll); voicePoll = null; } }
+async function voiceStart() {
+  const api = API(); if (!api) return;
+  $('voice-start').disabled = true;
+  const r = await api.voice_start();
+  if (r.ok) { toast('语音助手已启动'); updateVoiceLed(r.running); }
+  else { toast(r.error || '启动失败', true, 8000); pollVoice(); }
+}
+async function voiceStop() {
+  const api = API(); if (!api) return;
+  $('voice-stop').disabled = true;
+  const r = await api.voice_stop();
+  if (r.ok) { toast('语音助手已停止'); updateVoiceLed(r.running); }
+  else { toast(r.error || '停止失败', true); pollVoice(); }
+}
+
+/* ── 分页（侧栏导航沿用 .tabbar button，修订 22 拆成四页） ── */
+function initTabs() {
+  document.querySelectorAll('.tabbar button').forEach(b => {
+    b.onclick = () => {
+      document.querySelectorAll('.tabbar button').forEach(x => x.classList.remove('active'));
+      document.querySelectorAll('.tab-page').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+      $('tab-' + b.dataset.tab).classList.add('active');
+      if (b.dataset.tab === 'voice') startVoicePoll(); else stopVoicePoll();
+      if (b.dataset.tab === 'llm') loadSettings();
+      if (b.dataset.tab === 'log') refreshLog();
+    };
+  });
+}
+
+/* ── 事件绑定 ── */
+$('reg-btn').onclick = register;
+$('reg-path').addEventListener('keydown', e => { if (e.key === 'Enter') register(); });
+$('res-btn').onclick = resolve;
+$('open-btn').onclick = openApp;
+$('res-q').addEventListener('keydown', e => { if (e.key === 'Enter') resolve(); });
+$('log-btn').onclick = refreshLog;
+$('set-save').onclick = saveSettings;
+$('voice-start').onclick = voiceStart;
+$('voice-stop').onclick = voiceStop;
+
+/* ── 初始化：等 pywebview 桥就绪 ── */
+let _inited = false;
+function init() {
+  if (_inited) return; _inited = true;
+  initTabs();
+  refreshState();
+  refreshLog();
+  loadSettings();
+  startVoicePoll();   // 默认页是「语音控制」，开机即轮询状态
+  setInterval(refreshLog, 15000);
+}
+if (API()) init();  // 桥可能已就绪
+window.addEventListener('pywebviewready', init);
+setTimeout(() => { if (API()) init(); }, 3000);  // 兜底：漏掉 ready 事件也能起
+</script>
+</body>
+</html>

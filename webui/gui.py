@@ -1,0 +1,551 @@
+"""PyWebView 原生 GUI 控制台（CLAUDE.md 修订 19）。
+
+把 webui 界面装进一个原生窗口（无浏览器 / 无 localhost，走 pywebview js_api 桥），
+作为 GUI exe 的"应用正脸"：复用 webui 的别名管理 / 解析 / 打开 / 日志，新增 LLM 配置
+编辑和语音子进程启停。
+
+安全边界（§6 修订 19）：只暴露非破坏性操作——改 LLM 配置、启停语音、别名注册、
+解析测试、打开应用、看日志。绝不暴露关闭应用 / 删文件 / 跑命令（仍只走语音 + 二次确认）。
+
+语音以独立子进程运行（§4 / §16：主循环不依赖 GUI）：voice_start 拉起
+`sys.executable --voice`（frozen）或 `python main.py`（源码），voice_stop 杀掉它。
+子进程自己经 core.local_settings 从 voxctl.local.yaml 读 api_key 注入环境变量，
+所以这里启停只需普通 Popen，不必在 spawn 时注入 env。
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import logging.handlers
+import os
+import subprocess
+import sys
+import threading
+from pathlib import Path
+from typing import Optional, Union
+
+import webview
+import yaml
+
+# PyInstaller frozen 模式：静态资源在 _MEIPASS 解包目录，项目根 = exe 所在目录
+# （修订 24 从已删的 webui/server.py 内联：GUI 是这套底层的唯一消费者）
+if getattr(sys, "frozen", False):
+    _PROJECT_ROOT = Path(sys.executable).resolve().parent
+    _STATIC_DIR = Path(getattr(sys, "_MEIPASS", ".")) / "webui_static"
+    # config.yaml / voxctl.local.yaml / user_apps.yaml / logs/ 都按 exe 所在目录解析
+    os.chdir(_PROJECT_ROOT)
+else:
+    _PROJECT_ROOT = Path(__file__).resolve().parent.parent
+    _STATIC_DIR = Path(__file__).resolve().parent / "static"
+    if str(_PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(_PROJECT_ROOT))
+
+from executor import Executor, USER_APPS_FILE, load_user_apps
+from executor.app_index import AppIndex, MatchStatus
+from executor.whitelist import Whitelist
+
+from core.local_settings import (
+    _ASR_OVERRIDE_FIELDS,
+    _TTS_OVERRIDE_FIELDS,
+    effective_llm_settings,
+    effective_section_settings,
+    load_local_llm,
+    load_local_section,
+    save_local_settings,
+)
+from nlu.schema import OpenAppIntent
+
+_LOG = logging.getLogger(__name__)
+
+_AUDIT_LOG = _PROJECT_ROOT / "logs" / "actions.log"
+_INDEX_HTML = _STATIC_DIR / "index.html"
+_CONFIG_PATH = _PROJECT_ROOT / "config.yaml"
+
+# 别名路径只允许这两类目标：可执行文件和快捷方式
+_ALLOWED_SUFFIXES = {".exe", ".lnk"}
+
+
+def read_user_apps(path: Union[str, Path, None] = None) -> dict[str, str]:
+    """读取用户别名表。path=None 时用模块常量（调用时解析，方便测试替换）。"""
+    return load_user_apps(path if path is not None else USER_APPS_FILE)
+
+
+def write_user_apps(apps: dict[str, str], path: Union[str, Path, None] = None) -> None:
+    """整表写回 user_apps.yaml（机器写入文件，无注释保留问题）。"""
+    p = Path(path) if path is not None else Path(USER_APPS_FILE)
+    content = yaml.safe_dump(
+        {"apps": apps}, allow_unicode=True, default_flow_style=False, sort_keys=True,
+    )
+    header = (
+        "# Voxctl 用户别名表（GUI 控制台维护，CLAUDE.md 修订 16/24）\n"
+        "# 机器读写文件，手工编辑可以但注释不会保留。\n"
+        "# 主程序启动时合并进 whitelist.apps，config.yaml 同名别名优先。\n"
+    )
+    p.write_text(header + content, encoding="utf-8")
+
+
+def validate_alias(name: str, target: str) -> Optional[str]:
+    """校验别名注册请求。返回错误信息，None 表示合法。"""
+    name = (name or "").strip()
+    target = (target or "").strip().strip('"')
+    if not name:
+        return "应用名不能为空"
+    if len(name) > 50:
+        return "应用名过长（最多 50 字符）"
+    p = Path(target)
+    if not target or not p.is_absolute():
+        return "路径必须是绝对路径（如 D:\\Tools\\app.exe）"
+    if p.suffix.lower() not in _ALLOWED_SUFFIXES:
+        return "只支持 .exe 或 .lnk 文件"
+    if not p.is_file():
+        return f"文件不存在：{target}"
+    return None
+
+
+class ConsoleState:
+    """控制台共享状态：config + executor + 索引，别名变更后原子重建。"""
+
+    def __init__(self, config_path: Path) -> None:
+        self._config_path = config_path
+        self._lock = threading.Lock()
+        self.reload()
+
+    def reload(self) -> None:
+        with open(self._config_path, "r", encoding="utf-8") as f:
+            config = yaml.safe_load(f)
+        whitelist_cfg = config["whitelist"]
+        executor = Executor.from_config(whitelist_cfg)
+
+        # 解析测试用：独立持有 whitelist（含合并别名）和 index
+        merged_apps = dict(whitelist_cfg.get("apps") or {})
+        for k, v in read_user_apps().items():
+            merged_apps.setdefault(k, v)
+        wl = Whitelist.from_config({**whitelist_cfg, "apps": merged_apps})
+        index: Optional[AppIndex] = None
+        if bool(whitelist_cfg.get("allow_open_any_app", True)):
+            try:
+                index = AppIndex.build()
+            except Exception as exc:  # noqa: BLE001
+                _LOG.warning("AppIndex build failed: %s", exc)
+
+        with self._lock:
+            self._config = config
+            self.executor = executor
+            self.whitelist = wl
+            self.index = index
+            self.config_apps = dict(whitelist_cfg.get("apps") or {})
+
+    def resolve(self, query: str) -> dict:
+        """解析测试：白名单 → 索引，返回给前端的结构化结果。"""
+        query = (query or "").strip()
+        if not query:
+            return {"status": "not_found", "query": query}
+        wl_path = self.whitelist.get_app_path(query)
+        if wl_path is not None:
+            return {
+                "status": "found", "query": query, "resolved_via": "whitelist",
+                "display_name": query, "target": str(wl_path),
+            }
+        if self.index is not None:
+            m = self.index.resolve(query)
+            if m.status == MatchStatus.FOUND:
+                return {
+                    "status": "found", "query": query, "resolved_via": "index",
+                    "display_name": m.entry.display_name, "target": str(m.entry.target),
+                }
+            if m.status == MatchStatus.AMBIGUOUS:
+                return {"status": "ambiguous", "query": query,
+                        "candidates": list(m.candidates)}
+        return {"status": "not_found", "query": query}
+
+
+# Windows：隐藏语音子进程的控制台窗口
+_CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+
+# 语音子进程崩溃原因回读来源（修订 20）：
+#   _VOICE_LOG     —— 子进程自身 logger 写的 init 崩溃 traceback（含 RuntimeError 行）
+#   _VOICE_OUT_LOG —— Popen 重定向的 stdout/stderr，兜住连自身 logging 都没配好的早期崩溃
+_VOICE_LOG = _PROJECT_ROOT / "logs" / "voxctl.log"
+_VOICE_OUT_LOG = _PROJECT_ROOT / "logs" / "voxctl-voice.out"
+
+
+def _voice_command() -> list:
+    """语音子进程启动命令。frozen → 自身 exe --voice；源码 → python main.py。"""
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--voice"]
+    return [sys.executable, str(_PROJECT_ROOT / "main.py")]
+
+
+def _load_config_section(section: str) -> dict:
+    """读 config.yaml 的指定块（llm / asr / tts，给 get_settings 展示生效值）。失败返回空 dict。"""
+    try:
+        with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+        blk = cfg.get(section)
+        return blk if isinstance(blk, dict) else {}
+    except Exception as exc:  # noqa: BLE001
+        _LOG.warning("failed to read config.yaml %s block: %s", section, exc)
+        return {}
+
+
+def _load_config_llm() -> dict:
+    """读 config.yaml 的 llm 块（给 get_settings 展示生效值）。失败返回空 dict。"""
+    return _load_config_section("llm")
+
+
+class Api:
+    """pywebview js_api：前端用 window.pywebview.api.<method>() 调用。
+
+    pywebview 在工作线程上调用这些方法，故对共享的语音子进程句柄加锁。
+    只暴露非破坏性方法（§6 修订 19）；下划线开头的不会被 pywebview 暴露给前端。
+    """
+
+    def __init__(self) -> None:
+        # ConsoleState 构造会扫描开始菜单建 AppIndex（约数秒），延迟到首次访问，
+        # 让窗口先秒开、前端显示"载入中…"，不阻塞 GUI 启动。
+        self._state_obj: Optional[ConsoleState] = None
+        self._state_lock = threading.Lock()
+        self._voice_proc: Optional[subprocess.Popen] = None
+        self._voice_lock = threading.Lock()
+        self._voice_user_stopped = False   # 区分"用户主动停"与"意外崩溃退出"（修订 20）
+        self._voice_log_fh = None          # 子进程 stdout/stderr 重定向的文件句柄
+
+    @property
+    def _state(self) -> ConsoleState:
+        if self._state_obj is None:
+            with self._state_lock:
+                if self._state_obj is None:
+                    _LOG.info("building ConsoleState (scanning app index)...")
+                    self._state_obj = ConsoleState(_CONFIG_PATH)
+        return self._state_obj
+
+    # ---- 别名 / 解析 / 打开 / 日志（复用 webui 逻辑）--------------------
+    def get_state(self) -> dict:
+        st = self._state
+        return {
+            "config_apps": {k: str(v) for k, v in st.config_apps.items()},
+            "user_apps": read_user_apps(),
+            "index_count": len(st.index) if st.index is not None else 0,
+            "index_enabled": st.index is not None,
+        }
+
+    def get_log(self, n: int = 30) -> dict:
+        try:
+            n = min(200, max(1, int(n)))
+        except (ValueError, TypeError):
+            n = 30
+        entries: list = []
+        if _AUDIT_LOG.is_file():
+            lines = _AUDIT_LOG.read_text(encoding="utf-8").strip().splitlines()
+            for line in lines[-n:]:
+                try:
+                    entries.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+        entries.reverse()  # 最新在前
+        return {"entries": entries}
+
+    def add_alias(self, name: str, path: str) -> dict:
+        name = (name or "").strip()
+        target = (path or "").strip().strip('"')
+        err = validate_alias(name, target)
+        if err:
+            return {"ok": False, "error": err}
+        if name in self._state.config_apps:
+            return {"ok": False,
+                    "error": f"{name!r} 已在 config.yaml 里定义，config 优先，请换个名字"}
+        apps = read_user_apps()
+        apps[name] = target
+        write_user_apps(apps)
+        self._state.reload()
+        _LOG.info("[gui] alias added: %s -> %s", name, target)
+        return {"ok": True, "name": name, "path": target}
+
+    def delete_alias(self, name: str) -> dict:
+        name = (name or "").strip()
+        apps = read_user_apps()
+        if name not in apps:
+            return {"ok": False,
+                    "error": f"别名 {name!r} 不存在（config.yaml 里的别名不能在这里删）"}
+        del apps[name]
+        write_user_apps(apps)
+        self._state.reload()
+        _LOG.info("[gui] alias deleted: %s", name)
+        return {"ok": True, "name": name}
+
+    def resolve(self, query: str) -> dict:
+        return self._state.resolve(query or "")
+
+    def open_app(self, name: str) -> dict:
+        name = (name or "").strip()
+        if not name:
+            return {"ok": False, "error": "应用名不能为空"}
+        result = self._state.executor.execute(
+            OpenAppIntent(app_name=name), raw_text=f"[gui] 打开 {name}",
+        )
+        return {"ok": result.success, "error": result.error, "payload": result.payload}
+
+    # ---- 设置（LLM + ASR + TTS，写 voxctl.local.yaml，修订 19 / 23）--------
+    def get_settings(self) -> dict:
+        eff = effective_llm_settings(_load_config_llm())
+        asr = effective_section_settings(
+            _load_config_section("asr"), "asr", _ASR_OVERRIDE_FIELDS)
+        tts = effective_section_settings(
+            _load_config_section("tts"), "tts", _TTS_OVERRIDE_FIELDS)
+        # 不回传 api_key 明文；前端密码框始终留空，靠 has_local_key 提示"已设置"
+        return {
+            "provider": eff["provider"],
+            "model": eff["model"],
+            "base_url": eff["base_url"],
+            "api_key_env": eff["api_key_env"],
+            "has_local_key": eff["has_local_key"],
+            "overridden": eff["overridden"],
+            # ASR / TTS 生效值 + 各自覆盖标记（修订 23）
+            "asr_model": asr["model_size"],
+            "asr_overridden": asr["overridden"],
+            "tts_voice": tts["voice"],
+            "tts_overridden": tts["overridden"],
+            "voice_running": self._is_voice_running(),
+        }
+
+    def save_settings(self, provider: str = "", model: str = "",
+                      base_url: str = "", api_key: str = "",
+                      asr_model: str = "", tts_voice: str = "") -> dict:
+        provider = (provider or "").strip()
+        model = (model or "").strip()
+        base_url = (base_url or "").strip()
+        api_key = (api_key or "").strip()
+        asr_model = (asr_model or "").strip()
+        tts_voice = (tts_voice or "").strip()
+
+        if provider and provider not in ("anthropic", "openai"):
+            return {"ok": False, "error": "provider 只能是 anthropic 或 openai"}
+
+        llm: dict = {}
+        if provider:
+            llm["provider"] = provider
+        if model:
+            llm["model"] = model
+        if base_url:
+            llm["base_url"] = base_url
+        # api_key：非空则写入；空 = 保留现有本地 key（不清空，避免误删）
+        existing = load_local_llm().get("api_key")
+        if api_key:
+            llm["api_key"] = api_key
+        elif existing:
+            llm["api_key"] = existing
+
+        # ASR / TTS 覆盖（修订 23）：非空才写；空 = 保留现有本地覆盖，不清空
+        asr = dict(load_local_section("asr"))
+        if asr_model:
+            asr["model_size"] = asr_model
+        tts = dict(load_local_section("tts"))
+        if tts_voice:
+            tts["voice"] = tts_voice
+
+        try:
+            save_local_settings({"llm": llm, "asr": asr, "tts": tts})
+        except Exception as exc:  # noqa: BLE001
+            _LOG.exception("save_settings failed")
+            return {"ok": False, "error": f"保存失败：{exc}"}
+        _LOG.info("[gui] settings saved: provider=%s model=%s base_url=%s key=%s "
+                  "asr=%s tts=%s",
+                  provider or "-", model or "-", base_url or "-",
+                  "set" if (api_key or existing) else "-",
+                  asr_model or "-", tts_voice or "-")
+        return {"ok": True}
+
+    # ---- 语音子进程启停（修订 20：加固失败反馈，不再静默崩溃）------------
+    def voice_start(self) -> dict:
+        with self._voice_lock:
+            if self._voice_proc is not None and self._voice_proc.poll() is None:
+                return {"ok": True, "running": True, "pid": self._voice_proc.pid}
+
+            # 防线 1：启动前预检 API Key——本地文件或 env 都没有就别白起一个必崩的进程。
+            # 这正是用户实测遇到的场景（子进程读空 ANTHROPIC_API_KEY → RuntimeError → 退出）。
+            eff = effective_llm_settings(_load_config_llm())
+            env_name = eff.get("api_key_env") or "ANTHROPIC_API_KEY"
+            has_key = eff.get("has_local_key") or bool(os.environ.get(env_name, "").strip())
+            if not has_key:
+                return {"ok": False, "running": False,
+                        "error": f"未配置 API Key：请在上方 api_key 填写并保存，"
+                                 f"或设置系统环境变量 {env_name} 后重启本程序"}
+
+            # 防线 2：子进程 stdout/stderr 重定向到日志，兜住连自身 logging 都没配好的早期崩溃。
+            try:
+                self._voice_log_fh = open(
+                    _VOICE_OUT_LOG, "w", encoding="utf-8", errors="replace")
+            except Exception:  # noqa: BLE001
+                self._voice_log_fh = None
+
+            self._voice_user_stopped = False
+            try:
+                self._voice_proc = subprocess.Popen(
+                    _voice_command(),
+                    cwd=str(_PROJECT_ROOT),
+                    stdout=self._voice_log_fh or subprocess.DEVNULL,
+                    stderr=(subprocess.STDOUT if self._voice_log_fh
+                            else subprocess.DEVNULL),
+                    creationflags=_CREATE_NO_WINDOW,
+                )
+            except Exception as exc:  # noqa: BLE001
+                _LOG.exception("voice_start failed")
+                self._close_voice_log()
+                return {"ok": False, "running": False, "error": f"启动失败：{exc}"}
+
+            # 防线 3：短等探活。源码模式启动期崩溃（缺 key 之外的异常）约 2s 内暴露，
+            # 当场回读原因；frozen 导入慢、崩在窗口之后的交给 voice_status 轮询兜底（防线 4）。
+            try:
+                code = self._voice_proc.wait(timeout=2.5)
+            except subprocess.TimeoutExpired:
+                _LOG.info("voice subprocess started pid=%s", self._voice_proc.pid)
+                return {"ok": True, "running": True, "pid": self._voice_proc.pid}
+
+            reason = self._read_voice_failure_reason()
+            _LOG.error("voice subprocess exited early code=%s: %s", code, reason)
+            self._voice_proc = None
+            self._close_voice_log()
+            return {"ok": False, "running": False,
+                    "error": f"语音助手启动后随即退出（code={code}）：{reason}"}
+
+    def voice_stop(self) -> dict:
+        with self._voice_lock:
+            self._voice_user_stopped = True
+            if self._voice_proc is None or self._voice_proc.poll() is not None:
+                self._voice_proc = None
+                self._close_voice_log()
+                return {"ok": True, "running": False}
+            try:
+                self._voice_proc.terminate()
+                try:
+                    self._voice_proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self._voice_proc.kill()
+            except Exception as exc:  # noqa: BLE001
+                _LOG.exception("voice_stop failed")
+                return {"ok": False, "running": self._is_voice_running(),
+                        "error": f"停止失败：{exc}"}
+            _LOG.info("voice subprocess stopped")
+            self._voice_proc = None
+            self._close_voice_log()
+            return {"ok": True, "running": False}
+
+    def voice_status(self) -> dict:
+        with self._voice_lock:
+            proc = self._voice_proc
+            if proc is None:
+                return {"running": False, "pid": None}
+            code = proc.poll()
+            if code is None:
+                return {"running": True, "pid": proc.pid}
+            # 进程已退出——防线 4：区分用户主动停 vs 意外崩溃，后者回传原因让前端 toast。
+            self._voice_proc = None
+            self._close_voice_log()
+            if self._voice_user_stopped:
+                return {"running": False, "pid": None}
+            reason = self._read_voice_failure_reason()
+            _LOG.error("voice subprocess crashed code=%s: %s", code, reason)
+            return {"running": False, "pid": None, "crashed": True,
+                    "error": f"语音助手意外退出（code={code}）：{reason}"}
+
+    def _is_voice_running(self) -> bool:
+        return self._voice_proc is not None and self._voice_proc.poll() is None
+
+    def _close_voice_log(self) -> None:
+        fh = self._voice_log_fh
+        self._voice_log_fh = None
+        if fh is not None:
+            try:
+                fh.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    @staticmethod
+    def _read_voice_failure_reason() -> str:
+        """回读语音子进程崩溃原因：扫日志尾部找最后一条异常行（修订 20）。"""
+        for logf in (_VOICE_LOG, _VOICE_OUT_LOG):
+            try:
+                if not logf.is_file():
+                    continue
+                lines = logf.read_text(
+                    encoding="utf-8", errors="replace").strip().splitlines()
+            except Exception:  # noqa: BLE001
+                continue
+            if not lines:
+                continue
+            for line in reversed(lines[-60:]):
+                s = line.strip()
+                if s and any(tok in s for tok in
+                             ("Error:", "Exception:", "错误", "失败", "Traceback")):
+                    return s[:300]
+            return lines[-1].strip()[:300]
+        return "未知原因，请查看 logs/voxctl.log"
+
+
+def _setup_gui_logging() -> None:
+    """GUI 进程日志写 logs/voxctl-gui.log（windowed 无控制台）。"""
+    log_dir = _PROJECT_ROOT / "logs"
+    try:
+        log_dir.mkdir(exist_ok=True)
+    except Exception:  # noqa: BLE001
+        return
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    handler = logging.handlers.RotatingFileHandler(
+        log_dir / "voxctl-gui.log", maxBytes=5 * 1024 * 1024, backupCount=2,
+        encoding="utf-8",
+    )
+    handler.setFormatter(logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    ))
+    root.addHandler(handler)
+    if sys.stdout is not None:  # 源码模式有控制台时也打一份
+        sh = logging.StreamHandler(sys.stdout)
+        sh.setLevel(logging.INFO)
+        root.addHandler(sh)
+
+
+def run_gui() -> int:
+    """启动 PyWebView 原生控制台窗口。阻塞直到窗口关闭。"""
+    _setup_gui_logging()
+    if not _INDEX_HTML.is_file():
+        _LOG.error("index.html not found at %s", _INDEX_HTML)
+        print(f"[错误] 找不到界面文件：{_INDEX_HTML}", file=sys.stderr)
+        return 1
+
+    _LOG.info("starting Voxctl GUI console; index=%s", _INDEX_HTML)
+    api = Api()
+    window = webview.create_window(
+        "VOXCTL 控制台",
+        url=_INDEX_HTML.resolve().as_uri(),
+        js_api=api,
+        width=1180,
+        height=820,
+        min_size=(920, 640),
+        background_color="#131009",
+    )
+
+    # 窗口关闭时杀掉还在跑的语音子进程，避免残留
+    def _on_closing():
+        api.voice_stop()
+
+    try:
+        window.events.closing += _on_closing
+    except Exception:  # noqa: BLE001
+        pass
+
+    try:
+        webview.start()
+    except Exception as exc:  # noqa: BLE001
+        _LOG.exception("webview.start failed")
+        print(f"[错误] GUI 启动失败：{exc}", file=sys.stderr)
+        return 1
+    finally:
+        api.voice_stop()  # 兜底：确保退出时不留语音子进程
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(run_gui())
