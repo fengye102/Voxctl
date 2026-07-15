@@ -176,7 +176,7 @@ voice-assistant/
 ├── requirements.txt           # 依赖清单，版本锁定
 ├── config.yaml                # 配置文件：模型选择、音频设备、白名单等
 ├── run.bat                    # 一键启动脚本（激活虚拟环境 + 运行 main.py）
-├── main.py                    # 入口，启动 asyncio 主循环
+├── main.py                    # 入口，启动 asyncio 主循环；日志配置调 core/logger.py 的 configure_root_logging()（修订 25 起）
 ├── app.py                     # 统一入口（修订 19）：默认起 GUI 控制台，`--voice` 跑语音；GUI exe 打包入口
 │
 ├── audio/
@@ -219,12 +219,12 @@ voice-assistant/
 │   ├── event_loop.py           # 主循环：并发调度监听通道与播报通道
 │   ├── interrupt_coordinator.py # 状态协调器：打断信号判定与分发
 │   ├── state.py                 # 全局状态机（空闲/监听/识别/执行/播报/等待确认）
-│   ├── logger.py               # 日志（所有执行动作必须落日志，见第 6 节）
+│   ├── logger.py               # 共用日志配置 configure_root_logging()（修订 25 真正实现）：建 logs 目录 + RotatingFileHandler(UTF-8) + windowless-safe StreamHandler；main.py / webui/gui.py 各传自己的参数调用
 │   └── local_settings.py       # voxctl.local.yaml 读写 + LLM 覆盖注入（修订 19）
 │
 ├── webui/                      # 本地管理控制台（修订 24：只剩 PyWebView GUI 版，浏览器版已删）
 │   ├── __init__.py
-│   ├── gui.py                  # PyWebView 原生窗口 + js_api：别名管理/解析/打开/审计日志 + LLM/ASR/TTS 设置 + 启停语音；含 ConsoleState / 别名读写 / validate_alias（修订 24 从已删的 server.py 内联进来）
+│   ├── gui.py                  # PyWebView 原生窗口 + js_api：别名管理/解析/打开/审计日志 + LLM/ASR/TTS 设置 + 启停语音；含 ConsoleState / 别名读写 / validate_alias（修订 24 从已删的 server.py 内联进来）；日志配置调 core/logger.py 的 configure_root_logging()（修订 25 起）
 │   └── static/
 │       └── index.html          # 控制台前端（单文件，无构建步骤）
 │
@@ -556,5 +556,4 @@ whitelist:
 | 修订 23 | GUI 控制台补齐三页表单（用户需求：大模型配置页要有 LLM / ASR / TTS 三个模型选择框，应用别名和审计日志页沿用原有控件、只换新视觉）。改动：(1) **本地覆盖从"仅 llm"扩展到 asr/tts**——`core/local_settings.py` 新增 `asr.model_size`（tiny/base/small/medium/large-v3）和 `tts.voice`（Edge 中文音色）两类覆盖，与 llm 覆盖同一套"写 voxctl.local.yaml → apply_local_*_overrides 叠进 config"机制；`apply_local_llm_overrides` 更名保留兼容别名，实际由新的 `apply_local_overrides` 统一处理三块（llm/asr/tts），`event_loop.from_config_file` 调用点不变（仍在 yaml load 后、from_config 前叠加）。(2) **`webui/gui.py` `get_settings` / `save_settings` 扩展**：返回值加 `asr_model` / `tts_voice` 生效值 + 各自 `overridden` 标记，保存接受两个新参数；语音子进程读取路径不变（asr/tts 覆盖同样在子进程 `from_config_file` 时从本地文件叠加，与 llm 一致）。(3) **`index.html` 大模型配置页**加 LLM 模型 / ASR 模型 / TTS 音色三个选择框（模型选项是常见值下拉 + LLM model 保留自由文本因中转站别名不固定），应用别名页（注册 / 解析打开 / 别名表）和审计日志页沿用修订 22 的控件与逻辑，仅确认在新视觉下渲染正确。安全不变量不变：GUI 仍只暴露非破坏性操作，api_key 仍不进 config.yaml；asr/tts 覆盖是纯配置项、非破坏性。**首次打包实测（2026-07-15）**：`build_gui.bat` 产出 `dist\voxctl` 共 **271MB**（rev21 去 torch 后从 ~740MB 降约 470MB，达成 ~300MB 目标），无 torch 本体残留（仅几个 0MB 的 onnxruntime 子模块 py stub 名字含 torch，无害）；frozen 双角色冒烟通过——GUI 角色弹窗 + 界面从 `_internal/webui_static/index.html`（rev22/23 新毛玻璃视觉）加载 + AppIndex 201 条经桥构建；`--voice` 角色 onnxruntime 从 `_internal/silero_vad.onnx` 加载 VAD 成功（rev21 onnx drop-in 在 frozen 下证成）+ whisper/ctranslate2/opencc/audio 栈无缺依赖，最终缺 `ANTHROPIC_API_KEY` 优雅退出（预期，非打包问题，同 rev20 失败反馈路径）。修订 13/14 遗留的真实 MainLoop 集成冒烟测试仍未做 |
 
 | 修订 24 | 删掉 webui 浏览器版，只保留 PyWebView GUI 版（用户需求：不需要 webui 网页版）。背景：修订 16 的浏览器版（stdlib `http.server`）和修订 19 的 GUI 版长期并存，GUI 版已完全覆盖浏览器版全部功能（别名管理 / 解析 / 打开 / 审计日志 + 额外的 LLM/ASR/TTS 设置 + 启停语音），两版并存是纯重复维护。改动：(1) **删 `webui/server.py`**——它是两层混装：HTTP 服务层（`ConsoleHandler` / `do_GET` / `do_POST` / `main` / `serve_forever`，浏览器专属）+ 共享底层（`ConsoleState` / `read_user_apps` / `write_user_apps` / `validate_alias` / frozen 路径解析 `_PROJECT_ROOT`/`_STATIC_DIR`/`_AUDIT_LOG`），后者被 `webui/gui.py` import 复用。删除时把共享底层**内联进 `webui/gui.py`**（唯一消费者），HTTP 层整体丢弃。(2) **删 `webui.bat`**（浏览器版一键启动）和 **`build_console.bat`**（浏览器版 onefile 打包）。(3) **`tests/test_webui.py`**：删掉"3. HTTP 接口（真实起服务打 localhost）"整个 `TestWebuiEndpoints` 类（浏览器专属）；纯函数测试 `validate_alias` / `read/write_user_apps` 的 import 从 `webui.server` 改为 `webui.gui`；`TestUserAppsMerge`（executor 层合并优先级）不动。安全不变量不变：GUI 仍只暴露非破坏性操作，边界与修订 19 一致；去掉浏览器版反而消掉了"服务绑 127.0.0.1 但仍是开放端口"这一面。§3 目录树、§4 图形界面延后项、§6 GUI 边界、§8.10 打包说明同步更新。exe 重打包（`build_gui.bat` 不受影响）留给用户按需触发。修订 13/14 遗留的真实 MainLoop 集成冒烟测试仍未做 |
-
-> 后续每次架构调整，在此追加记录，不要直接覆盖历史决策。
+| 修订 25 | 清理死文件 + 真正实现 `core/logger.py` + 补 git 版本控制（用户需求：清理死文件、修正文档与代码不一致、核实修订 24 是否彻底）。**先核实修订 24 彻底落地**（`webui/server.py`/`webui.bat`/`build_console.bat` 确已删、`test_webui.py` import 已改自 `webui.gui`、§3/§4/§6/§8.10 描述已同步），文档与代码一致，无"文档说做了代码没做"的情况。改动：(1) **真正建 `core/logger.py`，消除重复日志配置**——背景：修订 11 起每次修订都补记"目录树写了 `core/logger.py` 但实际未独立实现（日志逻辑在 `main.py` 的 `setup_logging`）"，拖了 13 个修订的技术债这次闭环。依据：`main.py` 的 `setup_logging()` 与 `webui/gui.py` 的 `_setup_gui_logging()` 结构**完全同构**——都是建 logs 目录 → 取 root logger + setLevel → RotatingFileHandler(UTF-8, 同一 Formatter) → `sys.stdout is not None` 才加 StreamHandler（修订 19 windowless 保护），只有文件名/级别/大小参数不同。`core/logger.py` 提供 `configure_root_logging(log_path, file_level, console_level, max_bytes, backup_count)` 收敛这套逻辑；`main.py`（voxctl.log/DEBUG/10MB×3）和 `webui/gui.py`（voxctl-gui.log/INFO/5MB×2）改为传参调用，两处原有的 handler/Formatter 构造代码**完全删除**（不留残留，否则改 `core/logger.py` 不生效）。(2) **删死文件**：`main.spec`（早期 `python main.py` 的 onefile spec，已被 `build_voice.bat` 取代，两个 bat 均不引用，`.gitignore` 本就忽略 `*.spec`）；`voxctl-console.exe`（根目录 + `dist/` 各一份，修订 24 删浏览器版源码后的历史遗留产物，无代码依赖）。(3) **清理文档/注释残留**：`webui/__init__.py` docstring 的"仅 127.0.0.1"（浏览器版 HTTP 服务描述，GUI 版走 pywebview js_api 桥无 localhost）改为准确说法；`.gitignore` 删 `*.jit`/`*.ckpt` 及"silero-vad 模型缓存（torch hub 缓存目录）"注释（修订 21 砍 torch、VAD 改 onnx 直跑后的残留）。(4) **项目补 git 版本控制**：此前不是 git 仓库、任何删除不可逆，本次 `git init` 并在清理前打基线快照 commit，敏感文件 `voxctl.local.yaml`（含明文 key）/`user_apps.yaml` 经 `.gitignore` 正确排除不入库。安全不变量不变：仅重构日志配置和删历史产物，不碰白名单/二次确认/key 读取路径（仍 env var）/GUI 非破坏性边界。§3 目录树 `core/logger.py`/`main.py`/`webui/gui.py` 三条同步。修订 13/14 遗留的真实 MainLoop 集成冒烟测试仍未做 |

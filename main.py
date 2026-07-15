@@ -14,52 +14,27 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
-import logging.handlers
 import os
 import sys
 from pathlib import Path
 
 from core import MainLoop
+from core.logger import configure_root_logging
 
 
 def setup_logging() -> None:
-    """配置日志：控制台 INFO + 文件轮转 DEBUG（CLAUDE.md §6 审计日志是单独的 actions.log）。"""
-    log_dir = Path("logs")
-    log_dir.mkdir(exist_ok=True)
+    """配置日志：控制台 INFO + 文件轮转 DEBUG（CLAUDE.md §6 审计日志是单独的 actions.log）。
 
-    root = logging.getLogger()
-    root.setLevel(logging.DEBUG)
-
-    # 控制台：INFO，UTF-8（§8.6）。frozen --windowed 场景下 sys.stdout 可能为 None
-    # （GUI exe 无控制台），此时跳过控制台 handler，只写文件，避免 StreamHandler 崩（修订 19）。
-    if sys.stdout is not None:
-        console = logging.StreamHandler(sys.stdout)
-        console.setLevel(logging.INFO)
-        console.setFormatter(logging.Formatter(
-            "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-            datefmt="%H:%M:%S",
-        ))
-        # Windows 控制台默认非 UTF-8（§8.6），强制重配
-        if hasattr(sys.stdout, "reconfigure"):
-            try:
-                sys.stdout.reconfigure(encoding="utf-8")
-            except Exception:  # noqa: BLE001
-                pass
-        root.addHandler(console)
-
-    # 文件：DEBUG，10MB 轮转保留 3 份
-    file_handler = logging.handlers.RotatingFileHandler(
-        log_dir / "voxctl.log",
-        maxBytes=10 * 1024 * 1024,
-        backupCount=3,
-        encoding="utf-8",
+    共用逻辑（建目录 / RotatingFileHandler / windowless-safe StreamHandler）已收敛到
+    core/logger.py（修订 25），这里只传本进程的参数。
+    """
+    configure_root_logging(
+        Path("logs") / "voxctl.log",
+        file_level=logging.DEBUG,
+        console_level=logging.INFO,
+        max_bytes=10 * 1024 * 1024,
+        backup_count=3,
     )
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(logging.Formatter(
-        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    ))
-    root.addHandler(file_handler)
 
 
 def main() -> int:

@@ -35,7 +35,6 @@
 | [run.bat](run.bat) | 一键启动语音主程序：设 UTF-8 代码页 → 激活 venv → `python main.py`。日常开发用，用户双击即可。 |
 | [build_voice.bat](build_voice.bat) | 语音主程序 exe 打包脚本（PyInstaller onedir → `dist/voxctl/`，console 模式）。显式 collect ctranslate2/faster_whisper/onnxruntime/opencc/sounddevice/anthropic/openai，exclude torch，`--add-data` 打包 silero_vad.onnx。 |
 | [build_gui.bat](build_gui.bat) | GUI 控制台 exe 打包脚本（onedir `--windowed` 无黑窗）。在 build_voice 基础上加 PyWebView 原生栈（webview/clr_loader/pythonnet/bottle）+ `--hidden-import main`（供 `--voice` 子进程角色）+ 打包 index.html 到 `webui_static`。约 271MB。 |
-| [main.spec](main.spec) | 早期 PyInstaller spec（main.py，console onefile）。已被 build_voice.bat 取代，留作历史。 |
 | [_gui_smoke.py](_gui_smoke.py) | 源码模式 GUI 窗口**冒烟测试**（修订 19）。开 pywebview 窗口→探测 js_api 桥→检查 11 个方法存在→自动关闭。非交互。 |
 
 ---
@@ -108,8 +107,7 @@
 | [core/event_loop.py](core/event_loop.py) | **主循环核心**。`MainLoop` 把五个阶段串成状态机：`_phase_listen`/`_phase_asr`/`_phase_execute`/`_phase_tts`/`_phase_await_confirm`。同步调用用 `to_thread` 包装。TTS 阶段并发跑打断监听。二次确认、退出时序（修订 14：exit_requested 延迟到"再见"播完才置位）、打断取消退出（修订 13）、打断事件审计日志。`from_config_file()` 叠加本地覆盖。 |
 | [core/interrupt_coordinator.py](core/interrupt_coordinator.py) | **打断协调器**（Step 7）。TTS 期间 `monitor()` 并发监听音频队列，`process_chunk_interrupt` 判定打断→立即 `player.stop()`。`drain_queue()` 清空带 TTS 泄漏的残留音频块，避免回 LISTEN 后误触发。 |
 | [core/local_settings.py](core/local_settings.py) | **本地覆盖读写**（修订 19/23）。读写 voxctl.local.yaml，`apply_local_overrides()` 把 llm/asr/tts 叠进 config、把 api_key 注入环境变量（intent_parser 读取路径不变）。`effective_*_settings()` 给 GUI 展示生效值。 |
-
-> 注：CLAUDE.md 目录树提到的 `core/logger.py` 实际未独立实现，日志配置在 main.py 的 `setup_logging` 里（修订 11 已记录此不一致）。
+| [core/logger.py](core/logger.py) | **共用日志配置**（修订 25 真正实现）。`configure_root_logging(log_path, file_level, console_level, max_bytes, backup_count)`：建 logs 目录 + RotatingFileHandler(UTF-8) + windowless-safe StreamHandler（`sys.stdout` 为 None 时跳过，修订 19）。main.py（voxctl.log/DEBUG）与 webui/gui.py（voxctl-gui.log/INFO）各传参调用，消除此前两处重复逻辑。审计日志 actions.log 是另一条独立路径，不走这里。 |
 
 ---
 
@@ -168,7 +166,6 @@
 | 文件 | 作用 |
 |---|---|
 | [test_audio/segment_001.wav](test_audio/segment_001.wav) | VAD 截取出的人声片段样例（测试录音输出，不进 git）。 |
-| voxctl-console.exe | 早期浏览器版控制台的打包产物（修订 24 已删源码，此 exe 为历史遗留，可删）。 |
 
 ---
 

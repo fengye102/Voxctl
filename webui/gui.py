@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import json
 import logging
-import logging.handlers
 import os
 import subprocess
 import sys
@@ -54,6 +53,7 @@ from core.local_settings import (
     load_local_section,
     save_local_settings,
 )
+from core.logger import configure_root_logging
 from nlu.schema import OpenAppIntent
 
 _LOG = logging.getLogger(__name__)
@@ -484,27 +484,21 @@ class Api:
 
 
 def _setup_gui_logging() -> None:
-    """GUI 进程日志写 logs/voxctl-gui.log（windowed 无控制台）。"""
-    log_dir = _PROJECT_ROOT / "logs"
+    """GUI 进程日志写 logs/voxctl-gui.log（windowed 无控制台）。
+
+    共用逻辑已收敛到 core/logger.py（修订 25），这里只传 GUI 进程的参数。
+    mkdir/handler 建失败时静默跳过——GUI windowed 下建不起日志也不能让窗口崩。
+    """
     try:
-        log_dir.mkdir(exist_ok=True)
+        configure_root_logging(
+            _PROJECT_ROOT / "logs" / "voxctl-gui.log",
+            file_level=logging.INFO,
+            console_level=logging.INFO,
+            max_bytes=5 * 1024 * 1024,
+            backup_count=2,
+        )
     except Exception:  # noqa: BLE001
         return
-    root = logging.getLogger()
-    root.setLevel(logging.INFO)
-    handler = logging.handlers.RotatingFileHandler(
-        log_dir / "voxctl-gui.log", maxBytes=5 * 1024 * 1024, backupCount=2,
-        encoding="utf-8",
-    )
-    handler.setFormatter(logging.Formatter(
-        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    ))
-    root.addHandler(handler)
-    if sys.stdout is not None:  # 源码模式有控制台时也打一份
-        sh = logging.StreamHandler(sys.stdout)
-        sh.setLevel(logging.INFO)
-        root.addHandler(sh)
 
 
 def run_gui() -> int:

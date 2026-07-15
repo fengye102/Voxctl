@@ -16,10 +16,6 @@ logs/
 # 测试录音输出
 test_audio/
 
-# silero-vad 模型缓存（torch hub 缓存目录，通常在用户目录，这里以防万一）
-*.ckpt
-*.jit
-
 # IDE
 .idea/
 .vscode/
