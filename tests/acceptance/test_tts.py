@@ -13,10 +13,10 @@
 用法（PowerShell，已激活 venv）：
 
     # 仅跑模板化测试（快，无需网络）
-    python -m tests.test_tts --templates-only
+    python -m tests.acceptance.test_tts --templates-only
 
     # 全量验收（含真实播放，需联网 + 音频设备）
-    python -m tests.test_tts
+    python -m tests.acceptance.test_tts
 
 全部通过退出码 0，否则 1。
 """

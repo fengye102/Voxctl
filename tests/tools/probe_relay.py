@@ -7,13 +7,13 @@
 用法（PowerShell，已设好对应环境变量）：
 
     # Anthropic 协议
-    python -m tests.probe_relay --provider anthropic --base-url https://xxx --model claude-xxx
+    python -m tests.tools.probe_relay --provider anthropic --base-url https://xxx --model claude-xxx
 
     # OpenAI 协议
-    python -m tests.probe_relay --provider openai --base-url https://xxx/v1 --model gpt-4o-mini
+    python -m tests.tools.probe_relay --provider openai --base-url https://xxx/v1 --model gpt-4o-mini
 
     # 打官方端点：省掉 --base-url
-    python -m tests.probe_relay --provider anthropic --model claude-haiku-4-5-20251001
+    python -m tests.tools.probe_relay --provider anthropic --model claude-haiku-4-5-20251001
 
 判定标准：
     - PASS：响应体里能看到 tool_use / tool_calls 结构，说明该端点真支持 tool use

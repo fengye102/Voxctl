@@ -6,11 +6,11 @@
 
 用法（PowerShell，已激活 venv、已设好 API key 环境变量）：
 
-    python -m tests.test_intent_parser --provider anthropic
-    python -m tests.test_intent_parser --provider openai
+    python -m tests.acceptance.test_intent_parser --provider anthropic
+    python -m tests.acceptance.test_intent_parser --provider openai
 
     # 走中转站：
-    python -m tests.test_intent_parser --provider openai --base-url https://xxx/v1
+    python -m tests.acceptance.test_intent_parser --provider openai --base-url https://xxx/v1
 
 10/10 通过退出码 0，否则退出码 1。CLAUDE.md 明确要求两个 provider 各独立跑一遍，
 只测其中一个不算完成 Step 3 验收。

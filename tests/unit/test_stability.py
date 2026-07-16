@@ -24,12 +24,12 @@ import unittest
 from pathlib import Path
 
 # 保证从项目根目录导入
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 # 复用 test_main_loop 里的 PureStateMachineLoop
-from tests.test_main_loop import PureStateMachineLoop
+from tests.acceptance.test_main_loop import PureStateMachineLoop
 
 _LOG = logging.getLogger(__name__)
 
@@ -133,7 +133,7 @@ class TestInterruptStability(unittest.IsolatedAsyncioTestCase):
 
     async def test_20_interrupts_no_state_accumulation(self):
         """每轮：触发打断 → 验证状态正确清理。"""
-        from tests.test_interrupt import MockVAD, MockPlayer, MockTTS, MainLoopForTest
+        from tests.unit.test_interrupt import MockVAD, MockPlayer, MockTTS, MainLoopForTest
         from executor import ExecutionResult
 
         for i in range(self.ROUNDS):

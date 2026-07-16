@@ -6,12 +6,12 @@
 两种用法：
 
   1. 实时录音模式（推荐，完整闭环验证）：
-       python -m tests.test_asr --live
+       python -m tests.acceptance.test_asr --live
      程序自动录音 + VAD 截取 + ASR 转录，打印识别结果。
      说够 10 句后 Ctrl+C，人工核对准确率是否 < 10% 字错误率。
 
   2. 离线 wav 文件模式（验证已录好的片段）：
-       python -m tests.test_asr --wav-dir ./test_audio
+       python -m tests.acceptance.test_asr --wav-dir ./test_audio
      批量转录指定目录下所有 wav 文件，打印文件名和识别结果。
 
 参数：

@@ -13,7 +13,7 @@
 
 用法（PowerShell，已激活 venv）：
 
-    python -m tests.test_executor
+    python -m tests.acceptance.test_executor
 
 全部用例通过退出码 0，否则 1。
 """

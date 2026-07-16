@@ -13,13 +13,13 @@
 用法（PowerShell，已激活 venv）：
 
     # 状态机流程验证（无需麦克风/网络，快速）
-    python -m tests.test_main_loop
+    python -m tests.acceptance.test_main_loop
 
     # 真实端到端验收（需麦克风 + LLM API key + 音频设备）
-    python -m tests.test_main_loop --live --device 1
+    python -m tests.acceptance.test_main_loop --live --device 1
 
     # 只验证状态机 + 二次确认流程
-    python -m tests.test_main_loop --scenario confirm
+    python -m tests.acceptance.test_main_loop --scenario confirm
 """
 
 from __future__ import annotations

@@ -1,12 +1,11 @@
 audio:
   # sounddevice 输入设备索引。
   # null = 首次运行会打印设备列表并使用系统默认输入，建议填入实际索引（CLAUDE.md §8.2）
-  # 运行 `python -m tests.test_recorder_vad` 会打印可用设备列表。
+  # 运行 `python -m tests.acceptance.test_recorder_vad` 会打印可用设备列表。
   input_device_index: null
   # 输出设备模式：auto / headphone / speaker（CLAUDE.md §8.5）
   # auto = 启动时根据设备名关键词自动检测，检测失败默认按 speaker 处理
   output_mode: auto
-  sample_rate: 16000
 
 vad:
   # 静默监听阈值（0–1）：概率 >= 此值视为有人声（CLAUDE.md §2 VAD 选型）
@@ -56,6 +55,21 @@ llm:
 
 tts:
   voice: zh-CN-XiaoxiaoNeural    # Edge TTS 中文音色
+
+ui:
+  # 屏幕状态浮窗（光圈）总开关（CLAUDE.md §8.11 / 修订 26）
+  #   true  = GUI 控制台运行时在屏幕底部居中显示随语音状态变色的浮窗（默认）
+  #   false = 不显示浮窗，且语音子进程不产状态行（不污染控制台输出）
+  # 浮窗只在 GUI 角色渲染，纯视觉反馈；修订 33 起可点击 toggle 语音启停（非破坏性）
+  status_overlay: true
+
+  # 全局键盘热键 toggle 语音启停（CLAUDE.md §8.11 / §6 / 修订 33）
+  #   点击光圈 与 按此热键 都是「启停语音子进程」的等价触发（非破坏性，免二次确认）
+  #   格式：修饰键 + 主键，用 + 连接，如 "ctrl+alt+v" / "ctrl+shift+space"
+  #   修饰键支持 ctrl / alt / shift / win；GUI 控制台可改，覆盖写入 voxctl.local.yaml
+  hotkey: "ctrl+alt+v"
+  #   false = 不注册全局热键（只保留点击光圈 toggle）；热键被占用时启动会记日志并跳过
+  hotkey_enabled: true
 
 whitelist:
   # 打开应用放开开关（CLAUDE.md §6 修订 15）：

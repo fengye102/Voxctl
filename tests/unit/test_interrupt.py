@@ -26,7 +26,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 
 # 保证从项目根目录导入
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 

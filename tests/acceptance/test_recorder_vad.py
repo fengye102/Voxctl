@@ -13,13 +13,13 @@
 用法（PowerShell，已激活 venv）：
 
     # 列出设备，用默认输入设备，每次检测到语音保存为 wav：
-    python -m tests.test_recorder_vad --save-dir ./test_audio
+    python -m tests.acceptance.test_recorder_vad --save-dir ./test_audio
 
     # 指定设备索引：
-    python -m tests.test_recorder_vad --device 1
+    python -m tests.acceptance.test_recorder_vad --device 1
 
     # 只打印统计不保存：
-    python -m tests.test_recorder_vad
+    python -m tests.acceptance.test_recorder_vad
 
 验收通过条件：
   - 不说话时不会误触发（静默不输出片段）
