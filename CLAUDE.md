@@ -225,7 +225,7 @@ Voxctl/
 │   ├── hotkey.py               # 全局键盘热键监听（修订 33）：Win32 RegisterHotKey + daemon 消息循环线程，toggle 语音；纯 ctypes，非 Windows no-op
 │   └── static/
 │       ├── overlay.html        # 浮窗前端（单文件，离线自足，CSS @keyframes 动画 + iOS 玻璃质感 + 点击 toggle handler）
-│       └── overlay-preview.html # 浮窗视觉开发预览（独立打开，不打包不 import）
+│       └── overlay-preview.html # 磁盘存在，用途未在本文档正式声明
 │
 ├── core/
 │   ├── __init__.py
@@ -247,10 +247,10 @@ Voxctl/
 ├── user_apps.yaml              # webui 维护的用户别名表（机器写入，gitignore；启动时合并进 whitelist.apps，config.yaml 优先）
 ├── voxctl.local.yaml           # GUI 维护的本地覆盖：llm/asr/tts（机器写入，gitignore，含 api_key 明文，勿分享，修订 19/23）
 │
-├── brand/                      # 品牌资产目录（当前为空，预留 logo 等素材）
+├── brand/                      # 磁盘存在，用途未在本文档正式声明
 │   └── logo/
 │
-├── test_audio/                 # VAD 截取的人声片段样例（不进 git）
+├── test_audio/                 # 磁盘存在，用途未在本文档正式声明（不进 git）
 │   └── segment_001.wav
 │
 ├── tests/
