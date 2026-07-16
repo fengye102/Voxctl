@@ -18,24 +18,24 @@
 
 | 文件 | 作用 |
 |---|---|
-| [CLAUDE.md](CLAUDE.md) | **项目唯一事实来源**。架构图、技术栈、MVP 范围、分步开发计划、安全规则、Windows 踩坑、24 条变更记录。改架构先改这里再改代码。 |
+| [CLAUDE.md](CLAUDE.md) | **项目唯一事实来源**。架构图、技术栈、MVP 范围、分步开发计划、安全规则、Windows 踩坑、33 条变更记录。改架构先改这里再改代码。 |
 | [README.md](README.md) | 本文件。全项目文件地图。 |
-| [config.yaml](config.yaml) | **主配置**（用户可改，含手写注释）。audio / vad / asr / llm / tts / whitelist 全部字段。白名单三类（apps 别名、commands 命令、paths 路径）+ 打断阈值调优指南都在这里。禁止在代码里硬编码这些值。 |
+| [config.yaml](config.yaml) | **主配置**（用户可改，含手写注释）。audio / vad / asr / llm / tts / ui / whitelist 全部字段。白名单三类（apps 别名、commands 命令、paths 路径）+ 打断阈值调优指南都在这里。`ui` 块控制状态浮窗开关（`status_overlay`）和全局热键（`hotkey` / `hotkey_enabled`）。禁止在代码里硬编码这些值。 |
 | [voxctl.local.yaml](voxctl.local.yaml) | GUI 控制台维护的**本地覆盖**（机器写入，gitignore）。覆盖 config 的 llm/asr/tts 三块，**含 api_key 明文**。⚠ 随 exe 文件夹走，**勿分享 / 勿传 git**。 |
 | [user_apps.yaml](user_apps.yaml) | GUI 维护的**用户别名表**（应用名→exe/.lnk 路径，机器写入，gitignore）。启动时合并进 `whitelist.apps`，config.yaml 同名优先。独立成文件是为了不破坏 config.yaml 的注释。（当前工作区可能尚未生成。） |
-| [requirements.txt](requirements.txt) | 依赖清单（宽松基线版本）。pydantic/anthropic/openai/numpy/sounddevice/onnxruntime/faster-whisper/opencc/psutil/edge-tts/pywebview。注明修订 21 起用 onnxruntime 跑 VAD、去掉 torch。 |
+| [requirements.txt](requirements.txt) | 依赖清单（宽松基线版本）。pydantic/anthropic/openai/numpy/sounddevice/onnxruntime/faster-whisper/opencc/psutil/edge-tts/av(PyAV)/PyYAML/pywebview。注明修订 21 起用 onnxruntime 跑 VAD、去掉 torch。 |
 | [.gitignore](.gitignore) | 忽略规则。venv、logs、test_audio、打包产物、`voxctl.local.yaml` / `user_apps.yaml`（含密钥/机器写入）。 |
 
 ### 入口 / 启动脚本
 
 | 文件 | 作用 |
 |---|---|
-| [app.py](app.py) | **统一入口**（修订 19）。默认 `python app.py` 起 PyWebView GUI 控制台；`python app.py --voice` 委托 `main.main()` 跑语音。单 exe 靠 `--voice` 参数复用两种角色。含 frozen 下 stdout=None 重定向、chdir 到 exe 目录。 |
-| [main.py](main.py) | **语音主循环入口**。`setup_logging()`（控制台 INFO + 轮转文件 DEBUG，UTF-8，windowed 下跳过控制台 handler）、frozen chdir、`--config` 参数、构造 `MainLoop.from_config_file()` 跑 `asyncio.run`、捕获 Ctrl+C。 |
+| [app.py](app.py) | **统一入口**（修订 19）。默认 `python app.py` 起 PyWebView GUI 控制台；`python app.py --voice` 委托 `main.main()` 跑语音。单 exe 靠 `--voice` 参数复用两种角色。含 frozen 下 stdout 重定向（修订 28：语音角色接回 fd1 保证状态协议行落进 voxctl-voice.out，GUI 角色扔 devnull）、chdir 到 exe 目录。 |
+| [main.py](main.py) | **语音主循环入口**。日志配置调 `core/logger.py` 的 `configure_root_logging()`（修订 25：控制台 INFO + 轮转文件 DEBUG，UTF-8，windowed 下跳过控制台 handler）、frozen chdir、`--config` 参数、构造 `MainLoop.from_config_file()` 跑 `asyncio.run`、捕获 Ctrl+C。 |
 | [run.bat](run.bat) | 一键启动语音主程序：设 UTF-8 代码页 → 激活 venv → `python main.py`。日常开发用，用户双击即可。 |
 | [build_voice.bat](build_voice.bat) | 语音主程序 exe 打包脚本（PyInstaller onedir → `dist/voxctl/`，console 模式）。显式 collect ctranslate2/faster_whisper/onnxruntime/opencc/sounddevice/anthropic/openai，exclude torch，`--add-data` 打包 silero_vad.onnx。 |
-| [build_gui.bat](build_gui.bat) | GUI 控制台 exe 打包脚本（onedir `--windowed` 无黑窗）。在 build_voice 基础上加 PyWebView 原生栈（webview/clr_loader/pythonnet/bottle）+ `--hidden-import main`（供 `--voice` 子进程角色）+ 打包 index.html 到 `webui_static`。约 271MB。 |
-| [_gui_smoke.py](_gui_smoke.py) | 源码模式 GUI 窗口**冒烟测试**（修订 19）。开 pywebview 窗口→探测 js_api 桥→检查 11 个方法存在→自动关闭。非交互。 |
+| [build_gui.bat](build_gui.bat) | GUI 控制台 exe 打包脚本（onedir `--windowed` 无黑窗）。在 build_voice 基础上加 PyWebView 原生栈（webview/clr_loader/pythonnet/bottle）+ `--hidden-import main`（供 `--voice` 子进程角色）+ 打包 index.html 到 `webui_static` + overlay.html 到 `ui_static`（浮窗资源）。约 271MB。 |
+| [tests/acceptance/test_gui_smoke.py](tests/acceptance/test_gui_smoke.py) | 源码模式 GUI 窗口**冒烟测试**（修订 19）。开 pywebview 窗口→探测 js_api 桥→检查 11 个方法存在→自动关闭。非交互。 |
 
 ---
 
@@ -45,7 +45,7 @@
 |---|---|
 | [audio/__init__.py](audio/__init__.py) | 导出 AudioRecorder / VADProcessor / VADMode / AudioPlayer / OutputMode / detect_output_mode。 |
 | [audio/recorder.py](audio/recorder.py) | **录音封装**。`AudioRecorder` 用 sounddevice InputStream（16kHz、512 样本/帧），回调线程经 `run_coroutine_threadsafe` 把音频块送进 asyncio.Queue。`list_devices()`/`print_devices()` 引导选设备。异常 `AudioRecorderError`/`DeviceNotFoundError`。 |
-| [audio/player.py](audio/player.py) | **播放封装**。`AudioPlayer.play()`（sd.play 非阻塞 + `to_thread(sd.wait)`）、`stop()`（sd.stop 让 wait 返回——打断的物理基础）、`play_bytes()`、`is_playing`。 |
+| [audio/player.py](audio/player.py) | **播放封装**。`AudioPlayer.play()`（sd.play 非阻塞 + `to_thread(sd.wait)`）、`stop()`（sd.stop 让 wait 返回——打断的物理基础）、`is_playing`。 |
 | [audio/vad.py](audio/vad.py) | **VAD 核心**。`VADProcessor` 状态机（SILENCE→确认→SPEAKING→确认静默→emit 片段），用 onnxruntime+numpy 直跑 silero_vad.onnx，逐帧打概率、自复刻 OnnxWrapper 状态。`process_chunk(mode)` 常规监听、`process_chunk_interrupt()` 快速打断判定、`reset()`。含耳机/外放两套打断阈值、预滚防截字头。frozen 感知的模型路径解析。 |
 | [audio/silero_vad.onnx](audio/silero_vad.onnx) | **vendor 的 silero-vad 模型**（2.3MB，修订 21 随包走的打包资产）。绕开 silero_vad 官方包，去掉 torch 依赖。 |
 | [audio/output_mode.py](audio/output_mode.py) | **耳机/外放检测**。`detect_output_mode(override)` 用设备名关键词匹配返回 `OutputMode.HEADPHONE/SPEAKER`；检测失败默认 SPEAKER（更保守）。用户可在 config.yaml 手动覆盖。 |
@@ -66,12 +66,12 @@
 | 文件 | 作用 |
 |---|---|
 | [nlu/__init__.py](nlu/__init__.py) | 导出 IntentParser、schema 符号、LLM 异常。 |
-| [nlu/schema.py](nlu/schema.py) | **意图数据结构**（pydantic）。OpenApp/CloseApp/QuerySystem/OpenFile/RunCommand/ExitProgram/Confirm/Cancel/Unknown 各意图模型 + `IntentType` 枚举 + `ParsedIntent` 判别联合 + `validate_intent()` + `build_intent_schema()`（生成 tool 规格）。中文字段描述。 |
-| [nlu/llm_client.py](nlu/llm_client.py) | **LLM 抽象层**。`LLMClient` 抽象基类（`parse_intent(text, schema)`）、异常层级（LLMError/Timeout/Auth/RateLimit/API/Parse）、`build_client()` 工厂（惰性导入按 provider 实例化）。屏蔽厂商差异。 |
+| [nlu/schema.py](nlu/schema.py) | **意图数据结构**（pydantic）。OpenApp/CloseApp/QuerySystem/OpenFile/RunCommand/ExitProgram/Confirm/Cancel/Unknown 各意图模型 + `IntentType` 枚举 + `ParsedIntent` 判别联合 + `validate_intent()` + `build_intent_schema()`（生成 tool 规格）+ `safe_model_dump()`（安全转 dict，供 event_loop/executor 审计日志用）。中文字段描述。 |
+| [nlu/llm_client.py](nlu/llm_client.py) | **LLM 抽象层**。`LLMClient` 抽象基类（`parse_intent(text, schema)` + `_resolve_name()` 处理中转站 tool 名重写的公共逻辑）、异常层级（LLMError/Timeout/Auth/RateLimit/API/Parse）、`build_client()` 工厂（惰性导入按 provider 实例化）。屏蔽厂商差异。 |
 | [nlu/intent_parser.py](nlu/intent_parser.py) | **意图解析器**。`from_config()` 从环境变量读 api_key（空则 RuntimeError），`parse()` 把 LLM 错误映射为 UnknownIntent 兜底（Auth 错误重抛）。`LLMConfig` 数据类。 |
 | [nlu/providers/__init__.py](nlu/providers/__init__.py) | 仅文档字符串（无顶层 provider 导入，供惰性加载 / PyInstaller 裁剪）。 |
-| [nlu/providers/anthropic_provider.py](nlu/providers/anthropic_provider.py) | **Anthropic 实现**。Messages API + `tool_choice=any`，错误归一化，`_resolve_name()` 处理中转站的 tool 名重写，`_extract_tool_call()`。 |
-| [nlu/providers/openai_provider.py](nlu/providers/openai_provider.py) | **OpenAI 实现**。Chat Completions + `tool_choice=required`，解析 JSON arguments，同样的名字解析逻辑。 |
+| [nlu/providers/anthropic_provider.py](nlu/providers/anthropic_provider.py) | **Anthropic 实现**。Messages API + `tool_choice=any`，错误归一化，`_extract_tool_call()`。tool 名解析复用基类 `LLMClient._resolve_name()`。 |
+| [nlu/providers/openai_provider.py](nlu/providers/openai_provider.py) | **OpenAI 实现**。Chat Completions + `tool_choice=required`，解析 JSON arguments，tool 名解析同样复用基类。 |
 
 ---
 
@@ -111,42 +111,64 @@
 
 ---
 
+## ui/ — 状态浮窗（光圈）+ 全局热键
+
+屏幕底部居中的 80×80 小圆点，跟随语音状态机变色/变动画（IDLE 灰→LISTEN 红脉冲→ASR 六彩点→EXECUTE 紫环→TTS 绿波→AWAIT_CONFIRM 黄闪），给用户实时视觉反馈。可点击 toggle 语音启停，支持全局键盘热键。
+
+| 文件 | 作用 |
+|---|---|
+| [ui/__init__.py](ui/__init__.py) | 包标记。 |
+| [ui/state_protocol.py](ui/state_protocol.py) | **单向推送协议**（语音→GUI，stdout 行 JSON）。`encode_state_event(state, text)` 编码、`parse_line(line)` 解码（任何脏输入不抛异常返回 None）。事件类型：`state`/`asr_text`/`tts_text`/`error`/`exit`。纯函数，无副作用。 |
+| [ui/state_emitter.py](ui/state_emitter.py) | **语音端发送**。`emit_state(state, text)` → `print(json, flush=True)` 写一行。`VOXCTL_OVERLAY` 环境变量作闸门（GUI 设为 `1` 时才产协议行，独立 run.bat 不污染控制台）。同状态 200ms 内不重复推送。失败静默不崩主循环。 |
+| [ui/state_tailer.py](ui/state_tailer.py) | **GUI 端 tail 线程**。tail-follow `logs/voxctl-voice.out` → `parse_line` → `evaluate_js` 推浮窗。含文件不存在等待、rotate 重打开容错、首次跳历史。 |
+| [ui/overlay_window.py](ui/overlay_window.py) | **浮窗窗口**。pywebview frameless 置顶 + `SetWindowRgn` 居中正圆裁剪（解决 WinForms 最小宽撑非方窗的问题）+ ctypes `WS_EX_NOACTIVATE` 不抢焦点（说话时焦点留原应用）。固定屏幕底部居中（`_BOTTOM_GAP=140`）。支持传 `js_api` 桥实现点击 toggle。 |
+| [ui/hotkey.py](ui/hotkey.py) | **全局键盘热键**（修订 33）。Win32 `RegisterHotKey` + daemon 消息循环线程，toggle 语音启停。纯 ctypes，不引新依赖。热键被占用回报错误不静默。非 Windows no-op。 |
+| [ui/static/overlay.html](ui/static/overlay.html) | **浮窗前端**（单文件，离线自足，无 CDN）。CSS @keyframes 动画（脉冲/六彩点旋转/环/波/闪烁）+ iOS Siri 哑光玻璃质感（次表面散射多层渐变 + SVG feTurbulence 噪点 + 边缘羽化）。点击 → `pywebview.api.toggle()`。 |
+
+---
+
 ## webui/ — 本地管理控制台（PyWebView GUI）
 
 | 文件 | 作用 |
 |---|---|
 | [webui/__init__.py](webui/__init__.py) | 包标记（一行 docstring）。 |
-| [webui/gui.py](webui/gui.py) | **GUI 控制台主体**（修订 19/24）。PyWebView 原生窗口 + `Api` js_api 桥（11 个方法）：别名增删/解析/打开、审计日志、LLM/ASR/TTS 设置读写、语音子进程启停。修订 24 把已删的 server.py 共享底层（`ConsoleState`/别名读写/`validate_alias`/frozen 路径解析）内联进来。**只暴露非破坏性操作**；语音启停含四道失败反馈防线（修订 20：预检 key、重定向 stderr、探活、崩溃回读）。 |
+| [webui/gui.py](webui/gui.py) | **GUI 控制台主体**（修订 19/24/33）。PyWebView 原生窗口 + `Api` js_api 桥（11+ 个方法）：别名增删/解析/打开、审计日志、LLM/ASR/TTS 设置读写、语音子进程启停、热键设置。修订 24 把已删的 server.py 共享底层（`ConsoleState`/别名读写/`validate_alias`/frozen 路径解析）内联进来。`run_gui()` 按 `ui.status_overlay` 起浮窗 + tailer 线程 + 热键监听，浮窗桥与热键共用同一个 toggle 闭包。**只暴露非破坏性操作**；语音启停含四道失败反馈防线（修订 20：预检 key、重定向 stderr、探活、崩溃回读）。 |
 | [webui/static/index.html](webui/static/index.html) | **控制台前端**（单文件，无构建步骤）。修订 22 亮色毛玻璃视觉，**离线自足**（无 CDN/webfont/图片，纯 CSS 渐变）。左侧导航（语音控制/大模型配置/应用别名/审计日志）+ 右侧卡片。经 `window.pywebview.api.*` 调后端。 |
 
 ---
 
-## design/ — UI 设计稿（纯参考物）
+## tests/ — 测试与诊断脚本
+
+分三层组织。默认 `pytest` 只收集 `tests/unit/`（`pyproject.toml` 配置），验收脚本和诊断工具需手动运行。详见 [tests/README.md](tests/README.md)。
+
+### unit/ — 单元测试（可进 CI，无需设备/网络）
 
 | 文件 | 作用 |
 |---|---|
-| [design/settings-mockup.html](design/settings-mockup.html) | 设置界面**视觉原型**（修订 22）。用 Tailwind CDN 出稿——**不参与打包、不被代码 import、可随时删**。定稿后视觉落进 webui/static/index.html（手写 CSS，去 CDN）。生产界面必须离线自足，设计稿允许用 CDN。 |
+| [test_app_index.py](tests/unit/test_app_index.py) | AppIndex 匹配规则（临时目录伪造开始菜单，覆盖精确/子串/歧义/零命中/卸载排除）。 |
+| [test_interrupt.py](tests/unit/test_interrupt.py) | 打断功能（mock VAD/Player，12 用例含 monitor 检测/打断取消 pending/exit 时序）。 |
+| [test_stability.py](tests/unit/test_stability.py) | 稳定性（复用 PureStateMachineLoop，30 轮 0 崩溃 + RSS 增长检查 + 状态收敛）。 |
+| [test_webui.py](tests/unit/test_webui.py) | webui 纯函数（validate_alias / user_apps 合并优先级，修订 24 import 改自 webui.gui）。 |
+| [test_overlay.py](tests/unit/test_overlay.py) | 浮窗协议/emitter/tailer 纯逻辑（16 例，修订 26）。 |
+| [test_hotkey.py](tests/unit/test_hotkey.py) | 热键字符串解析纯函数（修订 33）。 |
 
----
-
-## tests/ — 分步验收脚本与单元测试
-
-多数是**系统级验收脚本**（对应 CLAUDE.md 各 Step，真实跑设备/网络/LLM），少数是纯单元测试。
+### acceptance/ — 验收脚本（需真实设备/网络，手动运行）
 
 | 文件 | 作用 |
 |---|---|
-| [tests/__init__.py](tests/__init__.py) | 测试包标记（空）。 |
-| [tests/test_recorder_vad.py](tests/test_recorder_vad.py) | Step 1 验收：录音闭环 + VAD 人声检测（交互式，真实麦克风，可存 wav）。 |
-| [tests/test_asr.py](tests/test_asr.py) | Step 2 验收：ASR 准确率。`--live` 实时录音转写，或 `--wav-dir` 离线核对。 |
-| [tests/test_intent_parser.py](tests/test_intent_parser.py) | Step 3 验收：意图解析准确率（打真实 LLM，两个 provider 各跑一遍，无 mock）。 |
-| [tests/probe_relay.py](tests/probe_relay.py) | 中转站兼容性探针（§8.9）。跳过 SDK 直接打 HTTP，验证目标端点是否真支持 tool use / function calling。换中转前先跑。 |
-| [tests/test_executor.py](tests/test_executor.py) | Step 4 验收：执行模块端到端（真实开关 notepad、查状态、开文件、跑命令、白名单拦截）。 |
-| [tests/test_app_index.py](tests/test_app_index.py) | AppIndex 单元测试（临时目录伪造开始菜单，覆盖精确/子串/歧义/零命中/卸载排除匹配规则）。 |
-| [tests/test_tts.py](tests/test_tts.py) | Step 5 验收：`format_result` 模板拼接纯函数测试 + 真实 edge-tts 合成播放。 |
-| [tests/test_main_loop.py](tests/test_main_loop.py) | Step 6 验收：主循环状态机（`--mock` 注入预录音频验证流转，或 `--live` 端到端）。 |
-| [tests/test_interrupt.py](tests/test_interrupt.py) | Step 7 验收：打断功能（mock VAD/Player，12 用例含 monitor 检测/打断取消 pending/exit 时序）。 |
-| [tests/test_stability.py](tests/test_stability.py) | Step 8 验收：稳定性（30 轮主循环 0 崩溃 + RSS 增长检查 + 状态收敛 + 轮次计数）。 |
-| [tests/test_webui.py](tests/test_webui.py) | webui 单元测试（修订 24）。user_apps.yaml 合并优先级 + `validate_alias`/`read/write_user_apps` 纯函数（浏览器版删除后 import 改自 webui.gui）。 |
+| [test_recorder_vad.py](tests/acceptance/test_recorder_vad.py) | Step 1：录音闭环 + VAD 人声检测（交互式，需真实麦克风，可存 wav）。 |
+| [test_asr.py](tests/acceptance/test_asr.py) | Step 2：ASR 准确率。`--live` 实时录音转写，或 `--wav-dir` 离线核对。 |
+| [test_intent_parser.py](tests/acceptance/test_intent_parser.py) | Step 3：意图解析准确率（打真实 LLM，两个 provider 各跑一遍，无 mock）。 |
+| [test_executor.py](tests/acceptance/test_executor.py) | Step 4：执行模块端到端（真实开关 notepad、查状态、开文件、跑命令、白名单拦截）。 |
+| [test_tts.py](tests/acceptance/test_tts.py) | Step 5：TTS 播报（默认需网络 + 音频设备；`--templates-only` 是纯函数可单独跑）。 |
+| [test_main_loop.py](tests/acceptance/test_main_loop.py) | Step 6：主循环状态机（默认 `--mock` 无需设备；`--live` 需全套真实环境）。 |
+| [test_gui_smoke.py](tests/acceptance/test_gui_smoke.py) | GUI 窗口冒烟（需 pywebview 真实窗口，非交互，自动关闭）。 |
+
+### tools/ — 诊断脚本（非测试）
+
+| 文件 | 作用 |
+|---|---|
+| [probe_relay.py](tests/tools/probe_relay.py) | 中转站兼容性探针（§8.9）。跳过 SDK 直接打 HTTP，验证目标端点是否真支持 tool use / function calling。换中转前先跑。 |
 
 ---
 
@@ -157,7 +179,7 @@
 | [logs/actions.log](logs/actions.log) | **审计日志**（§6 强制）。每次执行动作 + 打断事件的 JSON lines 记录（时间戳、原始文本、意图、操作、结果、打断详情）。排查误触发的唯一依据。 |
 | [logs/voxctl.log](logs/voxctl.log) | 语音主程序运行日志（轮转，DEBUG）。 |
 | [logs/voxctl-gui.log](logs/voxctl-gui.log) | GUI 进程日志（windowed 无控制台，日志只能进文件）。 |
-| [logs/voxctl-voice.out](logs/voxctl-voice.out) | GUI 拉起的语音子进程 stdout/stderr 重定向（修订 20：兜早期崩溃）。 |
+| [logs/voxctl-voice.out](logs/voxctl-voice.out) | GUI 拉起的语音子进程 stdout/stderr 重定向（修订 20：兜早期崩溃）。同时是状态浮窗的推送通道——语音进程写 `@@VOXCTL_STATE@@` 行 JSON，GUI tailer 线程 tail-follow 此文件推浮窗。 |
 
 ---
 

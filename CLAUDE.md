@@ -171,21 +171,23 @@ pip install pywebview
 ## 3. 模块划分与文件结构
 
 ```
-voice-assistant/
+Voxctl/
 ├── CLAUDE.md                  # 本文件
-├── requirements.txt           # 依赖清单，版本锁定
-├── config.yaml                # 配置文件：模型选择、音频设备、白名单等
-├── run.bat                    # 一键启动脚本（激活虚拟环境 + 运行 main.py）
-├── main.py                    # 入口，启动 asyncio 主循环；日志配置调 core/logger.py 的 configure_root_logging()（修订 25 起）
-├── app.py                     # 统一入口（修订 19）：默认起 GUI 控制台，`--voice` 跑语音；GUI exe 打包入口
+├── README.md                  # 项目文件地图
+├── requirements.txt           # 依赖清单（宽松基线版本）
+├── config.yaml                # 主配置（用户可改，含手写注释）：audio/vad/asr/llm/tts/ui/whitelist
+├── .gitignore                 # 忽略规则（venv/logs/打包产物/voxctl.local.yaml/user_apps.yaml）
+├── run.bat                    # 一键启动语音：设 UTF-8 代码页 → 激活 venv → python main.py
+├── main.py                    # 语音主循环入口；日志配置调 core/logger.py 的 configure_root_logging()（修订 25）
+├── app.py                     # 统一入口（修订 19）：默认起 GUI 控制台，`--voice` 跑语音；含 frozen stdout 重定向（修订 28）
 │
 ├── audio/
 │   ├── __init__.py
 │   ├── recorder.py            # sounddevice 录音封装
-│   ├── player.py               # sounddevice 播放封装
-│   ├── vad.py                  # VAD 封装，判断人声起止（含打断判定逻辑）；onnxruntime 直跑 onnx（修订 21）
-│   ├── silero_vad.onnx         # vendor 的 silero-vad 模型（2.3MB，打包资产，修订 21）
-│   └── output_mode.py          # 耳机/外放自动检测 + 手动覆盖
+│   ├── player.py              # sounddevice 播放封装
+│   ├── vad.py                 # VAD 封装，判断人声起止（含打断判定逻辑）；onnxruntime 直跑 onnx（修订 21）
+│   ├── silero_vad.onnx        # vendor 的 silero-vad 模型（2.3MB，打包资产，修订 21）
+│   └── output_mode.py         # 耳机/外放自动检测 + 手动覆盖
 │
 ├── asr/
 │   ├── __init__.py
@@ -193,13 +195,13 @@ voice-assistant/
 │
 ├── nlu/
 │   ├── __init__.py
-│   ├── llm_client.py           # 抽象基类 LLMClient，统一接口 parse_intent()，见第 2.1 节
+│   ├── llm_client.py          # 抽象基类 LLMClient：统一接口 parse_intent() + _resolve_name() 公共逻辑 + 异常层级，见第 2.1 节
 │   ├── providers/
 │   │   ├── __init__.py
-│   │   ├── anthropic_provider.py  # AnthropicClient(LLMClient)，anthropic SDK + tool use
-│   │   └── openai_provider.py     # OpenAIClient(LLMClient)，openai SDK + function calling
+│   │   ├── anthropic_provider.py  # AnthropicClient(LLMClient)，anthropic SDK + tool use，复用基类 _resolve_name()
+│   │   └── openai_provider.py     # OpenAIClient(LLMClient)，openai SDK + function calling，复用基类 _resolve_name()
 │   ├── intent_parser.py       # 按 config 的 provider 字段实例化对应 LLMClient，只依赖抽象接口
-│   └── schema.py               # 定义指令的数据结构（用 pydantic）
+│   └── schema.py              # 意图数据结构（pydantic）+ safe_model_dump() 公共函数
 │
 ├── executor/
 │   ├── __init__.py
@@ -214,37 +216,71 @@ voice-assistant/
 │   ├── __init__.py
 │   └── edge_tts_engine.py     # Edge TTS 封装
 │
+├── ui/                         # 状态浮窗（光圈，修订 26）：屏幕底部居中实时状态反馈
+│   ├── __init__.py
+│   ├── state_protocol.py       # 语音→GUI 单向 stdout 行 JSON 协议：encode_state_event / parse_line（纯函数）
+│   ├── state_emitter.py        # 语音子进程端：emit_state(state, text) → print(json, flush)；含发送端节流；失败静默不崩主循环
+│   ├── state_tailer.py         # GUI 端后台线程：tail-follow logs/voxctl-voice.out → parse_line → evaluate_js 推浮窗（含文件不存在等待 + rotate 重打开）
+│   ├── overlay_window.py       # 建 pywebview 圆形浮窗（底部居中，SetWindowRgn 裁正圆）+ ctypes 补 WS_EX_NOACTIVATE 不抢焦点 + 点击桥 js_api（修订 33）
+│   ├── hotkey.py               # 全局键盘热键监听（修订 33）：Win32 RegisterHotKey + daemon 消息循环线程，toggle 语音；纯 ctypes，非 Windows no-op
+│   └── static/
+│       ├── overlay.html        # 浮窗前端（单文件，离线自足，CSS @keyframes 动画 + iOS 玻璃质感 + 点击 toggle handler）
+│       └── overlay-preview.html # 浮窗视觉开发预览（独立打开，不打包不 import）
+│
 ├── core/
 │   ├── __init__.py
-│   ├── event_loop.py           # 主循环：并发调度监听通道与播报通道
+│   ├── event_loop.py           # 主循环：并发调度监听通道与播报通道；各 _phase_* 入口挂 ui.state_emitter.emit_state 钩子（修订 26，不改 state.py）
 │   ├── interrupt_coordinator.py # 状态协调器：打断信号判定与分发
 │   ├── state.py                 # 全局状态机（空闲/监听/识别/执行/播报/等待确认）
-│   ├── logger.py               # 共用日志配置 configure_root_logging()（修订 25 真正实现）：建 logs 目录 + RotatingFileHandler(UTF-8) + windowless-safe StreamHandler；main.py / webui/gui.py 各传自己的参数调用
-│   └── local_settings.py       # voxctl.local.yaml 读写 + LLM 覆盖注入（修订 19）
+│   ├── logger.py               # 共用日志配置 configure_root_logging()（修订 25）：建 logs 目录 + RotatingFileHandler(UTF-8) + windowless-safe StreamHandler
+│   └── local_settings.py       # voxctl.local.yaml 读写 + LLM/ASR/TTS 覆盖注入（修订 19/23）
 │
 ├── webui/                      # 本地管理控制台（修订 24：只剩 PyWebView GUI 版，浏览器版已删）
 │   ├── __init__.py
-│   ├── gui.py                  # PyWebView 原生窗口 + js_api：别名管理/解析/打开/审计日志 + LLM/ASR/TTS 设置 + 启停语音；含 ConsoleState / 别名读写 / validate_alias（修订 24 从已删的 server.py 内联进来）；日志配置调 core/logger.py 的 configure_root_logging()（修订 25 起）
+│   ├── gui.py                  # PyWebView 原生窗口 + js_api；含 ConsoleState / 别名读写 / validate_alias；run_gui() 起浮窗 + tailer + 热键（修订 26/33）
 │   └── static/
-│       └── index.html          # 控制台前端（单文件，无构建步骤）
+│       └── index.html          # 控制台前端（单文件，无构建步骤，离线自足）
 │
 ├── build_voice.bat             # 语音主程序 exe 打包脚本（PyInstaller onedir → dist/voxctl/，修订 18）
-├── build_gui.bat               # GUI 控制台 exe 打包脚本（PyInstaller onedir --windowed → dist/voxctl/，修订 19）
+├── build_gui.bat               # GUI 控制台 exe 打包脚本（onedir --windowed，含 overlay.html 到 ui_static，修订 19/26）
 │
-├── user_apps.yaml              # webui 维护的用户别名表（机器写入；启动时合并进 whitelist.apps，config.yaml 优先）
-├── voxctl.local.yaml           # GUI 维护的本地覆盖：llm.{provider,model,base_url,api_key} + asr.model_size + tts.voice（机器写入，gitignore，修订 19/23）
+├── user_apps.yaml              # webui 维护的用户别名表（机器写入，gitignore；启动时合并进 whitelist.apps，config.yaml 优先）
+├── voxctl.local.yaml           # GUI 维护的本地覆盖：llm/asr/tts（机器写入，gitignore，含 api_key 明文，勿分享，修订 19/23）
 │
-├── design/                     # UI 设计稿/原型（修订 22，纯参考物：不参与打包、不被代码 import）
-│   └── settings-mockup.html    # 设置界面视觉原型（命名约定：<页面>-mockup.html）
+├── brand/                      # 品牌资产目录（当前为空，预留 logo 等素材）
+│   └── logo/
+│
+├── test_audio/                 # VAD 截取的人声片段样例（不进 git）
+│   └── segment_001.wav
 │
 ├── tests/
-│   ├── test_vad.py
-│   ├── test_asr.py
-│   ├── test_intent_parser.py
-│   └── test_executor.py
+│   ├── __init__.py
+│   ├── README.md               # 三层目录说明（运行方式、CI 收集规则、跨层依赖备注）
+│   ├── unit/                   # 单元测试：纯函数/mock，无需真实设备或网络，能进 CI
+│   │   ├── __init__.py
+│   │   ├── test_app_index.py       # AppIndex 匹配规则（临时目录伪造数据）
+│   │   ├── test_interrupt.py       # 打断功能（mock VAD/Player，12 用例）
+│   │   ├── test_stability.py       # 稳定性（复用 PureStateMachineLoop，30 轮 0 崩溃 + RSS 检查）
+│   │   ├── test_webui.py           # webui 纯函数（validate_alias / user_apps 合并优先级）
+│   │   ├── test_overlay.py         # 浮窗协议/emitter/tailer 纯逻辑（16 例）
+│   │   └── test_hotkey.py          # 热键字符串解析纯函数
+│   ├── acceptance/             # 验收脚本：需真实设备/网络/LLM，手动运行
+│   │   ├── __init__.py
+│   │   ├── test_recorder_vad.py    # Step 1：录音闭环 + VAD（需麦克风，交互式）
+│   │   ├── test_asr.py             # Step 2：ASR 准确率（需麦克风或 wav 文件）
+│   │   ├── test_intent_parser.py   # Step 3：意图解析（打真实 LLM，需网络 + API key）
+│   │   ├── test_executor.py        # Step 4：执行模块端到端（真实开关 notepad 等）
+│   │   ├── test_tts.py             # Step 5：TTS 播报（默认需网络 + 音频设备）
+│   │   ├── test_main_loop.py       # Step 6：主循环（默认 --mock 无需设备；--live 需全套）
+│   │   └── test_gui_smoke.py       # GUI 窗口冒烟（需 pywebview 真实窗口）
+│   └── tools/                  # 诊断/探针脚本，不是测试
+│       └── probe_relay.py          # 中转站兼容性探针（换中转前手动跑，§8.9）
 │
-└── logs/
-    └── actions.log              # 执行动作审计日志（不进 git）
+└── logs/                       # 运行时日志（不进 git）
+    ├── actions.log              # 审计日志：执行动作 + 打断事件的 JSON lines（§6 强制）
+    ├── voxctl.log               # 语音主程序运行日志（轮转，DEBUG）
+    ├── voxctl-gui.log           # GUI 进程日志（windowed 无控制台，日志只进文件）
+    └── voxctl-voice.out         # 语音子进程 stdout/stderr 重定向 + 状态浮窗推送通道（@@VOXCTL_STATE@@ 行 JSON）
 ```
 
 ### 命名与存放约定
@@ -253,7 +289,7 @@ voice-assistant/
 - 每个模块自己的异常，用自定义 Exception 类，不要裸用 `Exception`。
 - 日志文件、模型缓存文件不进 git，写入 `.gitignore`。
 - 新增执行能力（比如以后加"发邮件"）在 `executor/` 下新建文件，注册进白名单，不要塞进已有文件。
-- `design/` 存 UI 设计稿/原型（修订 22）：命名 `<页面>-mockup.html`，纯参考物——不参与打包、不被任何代码 import、可随时删除；设计稿允许用 CDN（如 Tailwind CDN），但**生产界面（`webui/static/`）必须离线自足**（frozen exe 无网也要能渲染，不引任何 CDN 资源）。设计定稿并落入 `webui/static/` 后，mockup 保留作视觉基准。
+- **生产界面（`webui/static/`）必须离线自足**（frozen exe 无网也要能渲染，不引任何 CDN 资源）。
 
 ### config.yaml 骨架
 
@@ -282,6 +318,11 @@ llm:
 
 tts:
   voice: zh-CN-XiaoxiaoNeural     # Edge TTS 中文音色，可替换
+
+ui:
+  status_overlay: true            # 状态浮窗（光圈）总开关，见第 8.11 节
+  hotkey: "ctrl+alt+v"            # 全局热键 toggle 语音启停（修订 33）；GUI 可改，覆盖写 voxctl.local.yaml
+  hotkey_enabled: true            # 是否注册全局热键；false = 只保留点击光圈 toggle
 
 whitelist:
   apps:
@@ -404,6 +445,7 @@ whitelist:
 - **关闭应用、命令、文件路径仍 100% 白名单强制**：关闭 = 杀进程，可能丢未保存数据，不放开；`commands` / `paths` 是高危面，不放开。任何不在白名单内的这三类操作，一律拒绝执行，并 TTS 告知用户"这个操作不在允许范围内"，不做智能猜测或模糊匹配放行。
 - **GUI 控制台边界（修订 19）**：`webui/gui.py` 的 PyWebView 原生控制台**只暴露非破坏性操作**——改 LLM 配置（base_url / model / api_key，写 `voxctl.local.yaml`）、启停语音子进程、别名注册、解析测试、打开应用；**绝不**暴露关闭应用 / 删文件 / 跑命令（这三类仍只走语音 + 二次确认，边界同上条）。启停语音只是拉起 / 杀掉语音子进程，不是系统破坏性操作，不需二次确认。api_key 存 `voxctl.local.yaml` 明文（用户明确选择，§2 已记录放宽），语音仍经环境变量读取（`core/local_settings.py` 启动时注入），key **不进 `config.yaml`**；该本地文件随 exe 文件夹走，勿分享 / 传 git。
 - **启停必须给出失败反馈（修订 20）**：`Popen` 成功 ≠ 语音初始化成功——子进程可能在加载 vad/whisper 后因缺 key / 换错 base_url / 设备异常而崩溃退出，GUI **不得静默**把开关拨回"已停止"，须回读 `logs/voxctl.log` 尾部异常行把原因告知用户。落实为四道防线：启动前预检 key（本地文件或 env 都没有就直接拒绝，不白起必崩进程）、子进程 stdout/stderr 重定向到 `logs/voxctl-voice.out`（兜早期崩溃）、启动后短等探活（源码模式快速崩当场回读）、`voice_status` 轮询区分"用户主动停"与"意外崩溃"（frozen 导入慢崩在探活窗口之后的兜底）。
+- **点击光圈 / 全局热键 = 启停的等价触发（修订 33）**：点击状态浮窗、按全局键盘热键，都只是 GUI 启停语音子进程的**新触发方式**，走同一套 `toggle_voice`（内部复用修订 20 的启停逻辑与四道防线），不新增任何能力面——不暴露关闭应用 / 删文件 / 跑命令。因光圈太小放不下失败文字，点击/热键**启动失败**只做红闪 + 日志，详细原因仍需开 GUI 看（GUI 按钮路径的失败反馈不变）。热键用纯 ctypes `RegisterHotKey`，热键被占用要回报错误不静默。
 
 ### 二次确认机制（强制）
 
@@ -524,6 +566,36 @@ whitelist:
   - **console 模式（非 windowed）**：语音助手要在窗口里显示识别文本/日志，保留控制台窗口，与原 PowerShell 运行体验一致。
 - **多 provider 的额外坑**：`nlu/providers/` 下两个 provider 文件只要都在代码里被 import（哪怕运行时只用一个），PyInstaller 静态分析就会把 `anthropic` 和 `openai` 两个 SDK 全部打进 exe，不会因为 `config.yaml` 里 `provider: anthropic` 就自动裁掉没用到的 `openai` 相关依赖。届时如果确定用户只会用固定的一种 provider，考虑在打包脚本层面用条件 import 或单独的打包配置排除掉另一个 SDK；如果两种都要保留给用户切换，接受体积代价即可，不用为了省这点体积牺牲切换灵活性。这个决策留到真正打包时再做，MVP 阶段不用管。
 
+### 8.11 状态浮窗（光圈）（修订 26）
+
+给用户一个屏幕级实时状态反馈——一枚浮在屏幕右下角的小圆点，跟随语音状态机变色/变动画，让用户在说话过程中直观感知"系统在运作"，不必盯日志。参考 Openless 的 Capsule 组件。
+
+- **形态**：80×80px 圆形，屏幕右下角（距右下边距各 20px），`frameless` + 置顶 + **不抢焦点**、可拖动。位置存 `localStorage`，重启保持。不做大于 120×120（迷你不挡视线）。
+- **状态→视觉映射**（前端 CSS class 切换）：
+
+  | Voxctl 状态 | 颜色 | 动画 | 最短显示 |
+  |---|---|---|---|
+  | IDLE | 灰 | 静止 | - |
+  | LISTEN | 红 | 脉冲呼吸 | - |
+  | ASR | 蓝 | 旋转环 | 200ms |
+  | EXECUTE | 紫 | 旋转环 | 200ms |
+  | TTS | 绿 | 波形 | - |
+  | AWAIT_CONFIRM | 黄 | 闪烁 | - |
+  | 错误 | 红 | 闪烁 | 500ms |
+
+- **状态推送协议（单向：语音子进程 → GUI，stdout 行 JSON）**：不开新端口 / 不用命名管道 / 不用 socket。**复用修订 20 已有的 `logs/voxctl-voice.out` 通道**——`webui/gui.py` 的 `voice_start` 早已把语音子进程 stdout/stderr 重定向到该文件（原为兜早期崩溃）。语音进程每次状态转换 `print(json.dumps(...), flush=True)` 写一行，GUI 侧后台线程 tail-follow 该文件、逐行解析、`evaluate_js` 推给浮窗。协议定义在 `ui/state_protocol.py`：每行一个 JSON 对象，必填 `event`（`"state"`/`"asr_text"`/`"tts_text"`/`"error"`/`"exit"`），`state` 事件 payload `{event:"state", state:"asr", ts:<float>, text?:<str>}`。`encode_state_event(state, text=None)->str` 编码、`parse_line(line)->dict|None`（非法 JSON/非状态行返回 None，容错，因为该文件也混着子进程别的 stdout）。**浮窗不显示敏感信息**（无 api_key / 无绝对路径）。
+- **不抢焦点的实现**：pywebview `frameless=True` + `easy_drag=True` **不足以**保证不抢焦点——Windows 上新窗口默认会 activate。用 `ctypes.windll.user32`（stdlib，不引新依赖）按窗口标题拿 HWND，`SetWindowLong` 追加 `WS_EX_NOACTIVATE | WS_EX_TOPMOST`。这样用户说话时焦点保留在原应用（记事本光标不丢）。
+- **节流**：同状态 200ms 内不重复推送；状态切换后最短显示 200ms（避免 ASR/EXECUTE 一闪而过看不清）。节流在发送端（`ui/state_emitter.py`）和前端各做一层。
+- **架构约束（不可违反）**：
+  - **不改 `core/state.py`**（State 枚举 / LoopState 不动）、**不改 `main.py` 主循环结构**、**不把推送塞进 `LoopState.transition()`**（保持状态机纯，副作用留在业务层）。
+  - 状态推送钩子只挂在 `core/event_loop.py` 各 `_phase_*` 方法入口这一个业务层，调 `ui/state_emitter.emit_state(state, text=None)`。emit 失败（stdout 挂了/BrokenPipe）静默吞掉，绝不能让语音主循环因为浮窗崩。
+  - 浮窗**默认纯展示、可选一个非破坏性交互（修订 33 松动）**：状态推送方向不变（仍单向 GUI←语音，浮窗不反向控制语音状态机）；但允许**点击光圈 toggle 语音子进程启停**——这是 §6/§19 早已许可的非破坏性生命周期操作（启停 = 拉起/杀掉语音子进程，非系统破坏、免二次确认），不碰关闭应用/删文件/跑命令边界。`config.yaml` 新增 `ui.status_overlay`（默认 `true`），关闭时 GUI 不起浮窗窗口/不起 tailer 线程，语音功能完全不受影响（emit 仍照写 stdout，无人读而已，无害）。
+  - **点击不抢焦点并存**：`WS_EX_NOACTIVATE` 只阻止「点击时把浮窗激活成前台」，鼠标消息照常投递给光标下窗口 → WebView2 收到 → JS `click` 触发。故「点击 toggle」与「说话时焦点留原应用」两约束**同时成立**，是本交互的前提（frozen 冒烟须验证点击后焦点不转移）。
+  - **全局键盘热键 toggle（修订 33）**：`ui/hotkey.py` 用 Win32 `RegisterHotKey(NULL,id,mods,vk)` + 独立 daemon 线程跑 `GetMessageW` 收 `WM_HOTKEY`，停止用 `PostThreadMessageW(WM_QUIT)`。**纯 ctypes（stdlib），不引新依赖、非 IPC/socket/管道**。热键字符串（如 `ctrl+alt+v`）存 `config.yaml` 的 `ui.hotkey`，GUI 可改并写入 `voxctl.local.yaml` 的 `ui` 块覆盖；热键被占用（RegisterHotKey 失败）要回报错误，不静默。非 Windows 整体 no-op。
+  - **启停失败反馈的尺寸取舍**：光圈太小无法显示失败原因文字——点击/热键启动失败时光圈**红闪 + 写日志**，详细原因（缺 key / base_url 错等）仍需开 GUI 看（修订 20 的失败反馈在 GUI 启停按钮路径上仍完整）；停止路径由 GUI 侧直接 `evaluate_js` 推 `exit` 事件把光圈归灰（语音停了不再产状态行）。
+- **模块落点**（新增 `ui/` 包，独立于既有模块）：`ui/state_protocol.py`（协议纯函数）、`ui/state_emitter.py`（语音端发送）、`ui/state_tailer.py`（GUI 端 tail 线程，含文件不存在等待 + rotate 重打开容错）、`ui/overlay_window.py`（建浮窗 + NOACTIVATE + 点击桥 js_api）、`ui/hotkey.py`（全局热键监听，修订 33，纯 ctypes）、`ui/static/overlay.html`（单文件前端，离线自足，无 CDN，同 `webui/static` 风格；含点击 toggle handler）。`webui/gui.py` 的 `run_gui()` 里按 `ui.status_overlay` 起浮窗 + tailer 线程 + 热键监听，浮窗 bridge 与热键共用同一个 toggle 闭包。
+- **打包**：`ui/static/overlay.html` 是 GUI 浮窗的资源，**`build_gui.bat` 必须 `--add-data ui\static\overlay.html;ui_static`**（GUI 是浮窗唯一消费者）。`build_voice.bat`（纯语音 exe，不显示浮窗）本可不加，但语音 exe 仍 import `ui.state_emitter` 发送状态，故给它加 `--hidden-import ui.state_emitter`；overlay.html 对 voice-only exe 无用，不必 add-data。（**方案原写"改 build_voice.bat 加 overlay 资源"是把消费者搞反了**——浮窗只在 GUI 角色显示，资源该进 `build_gui.bat`，见修订 26。）
+
 ---
 
 ## 9. 变更记录
@@ -557,3 +629,11 @@ whitelist:
 
 | 修订 24 | 删掉 webui 浏览器版，只保留 PyWebView GUI 版（用户需求：不需要 webui 网页版）。背景：修订 16 的浏览器版（stdlib `http.server`）和修订 19 的 GUI 版长期并存，GUI 版已完全覆盖浏览器版全部功能（别名管理 / 解析 / 打开 / 审计日志 + 额外的 LLM/ASR/TTS 设置 + 启停语音），两版并存是纯重复维护。改动：(1) **删 `webui/server.py`**——它是两层混装：HTTP 服务层（`ConsoleHandler` / `do_GET` / `do_POST` / `main` / `serve_forever`，浏览器专属）+ 共享底层（`ConsoleState` / `read_user_apps` / `write_user_apps` / `validate_alias` / frozen 路径解析 `_PROJECT_ROOT`/`_STATIC_DIR`/`_AUDIT_LOG`），后者被 `webui/gui.py` import 复用。删除时把共享底层**内联进 `webui/gui.py`**（唯一消费者），HTTP 层整体丢弃。(2) **删 `webui.bat`**（浏览器版一键启动）和 **`build_console.bat`**（浏览器版 onefile 打包）。(3) **`tests/test_webui.py`**：删掉"3. HTTP 接口（真实起服务打 localhost）"整个 `TestWebuiEndpoints` 类（浏览器专属）；纯函数测试 `validate_alias` / `read/write_user_apps` 的 import 从 `webui.server` 改为 `webui.gui`；`TestUserAppsMerge`（executor 层合并优先级）不动。安全不变量不变：GUI 仍只暴露非破坏性操作，边界与修订 19 一致；去掉浏览器版反而消掉了"服务绑 127.0.0.1 但仍是开放端口"这一面。§3 目录树、§4 图形界面延后项、§6 GUI 边界、§8.10 打包说明同步更新。exe 重打包（`build_gui.bat` 不受影响）留给用户按需触发。修订 13/14 遗留的真实 MainLoop 集成冒烟测试仍未做 |
 | 修订 25 | 清理死文件 + 真正实现 `core/logger.py` + 补 git 版本控制（用户需求：清理死文件、修正文档与代码不一致、核实修订 24 是否彻底）。**先核实修订 24 彻底落地**（`webui/server.py`/`webui.bat`/`build_console.bat` 确已删、`test_webui.py` import 已改自 `webui.gui`、§3/§4/§6/§8.10 描述已同步），文档与代码一致，无"文档说做了代码没做"的情况。改动：(1) **真正建 `core/logger.py`，消除重复日志配置**——背景：修订 11 起每次修订都补记"目录树写了 `core/logger.py` 但实际未独立实现（日志逻辑在 `main.py` 的 `setup_logging`）"，拖了 13 个修订的技术债这次闭环。依据：`main.py` 的 `setup_logging()` 与 `webui/gui.py` 的 `_setup_gui_logging()` 结构**完全同构**——都是建 logs 目录 → 取 root logger + setLevel → RotatingFileHandler(UTF-8, 同一 Formatter) → `sys.stdout is not None` 才加 StreamHandler（修订 19 windowless 保护），只有文件名/级别/大小参数不同。`core/logger.py` 提供 `configure_root_logging(log_path, file_level, console_level, max_bytes, backup_count)` 收敛这套逻辑；`main.py`（voxctl.log/DEBUG/10MB×3）和 `webui/gui.py`（voxctl-gui.log/INFO/5MB×2）改为传参调用，两处原有的 handler/Formatter 构造代码**完全删除**（不留残留，否则改 `core/logger.py` 不生效）。(2) **删死文件**：`main.spec`（早期 `python main.py` 的 onefile spec，已被 `build_voice.bat` 取代，两个 bat 均不引用，`.gitignore` 本就忽略 `*.spec`）；`voxctl-console.exe`（根目录 + `dist/` 各一份，修订 24 删浏览器版源码后的历史遗留产物，无代码依赖）。(3) **清理文档/注释残留**：`webui/__init__.py` docstring 的"仅 127.0.0.1"（浏览器版 HTTP 服务描述，GUI 版走 pywebview js_api 桥无 localhost）改为准确说法；`.gitignore` 删 `*.jit`/`*.ckpt` 及"silero-vad 模型缓存（torch hub 缓存目录）"注释（修订 21 砍 torch、VAD 改 onnx 直跑后的残留）。(4) **项目补 git 版本控制**：此前不是 git 仓库、任何删除不可逆，本次 `git init` 并在清理前打基线快照 commit，敏感文件 `voxctl.local.yaml`（含明文 key）/`user_apps.yaml` 经 `.gitignore` 正确排除不入库。安全不变量不变：仅重构日志配置和删历史产物，不碰白名单/二次确认/key 读取路径（仍 env var）/GUI 非破坏性边界。§3 目录树 `core/logger.py`/`main.py`/`webui/gui.py` 三条同步。修订 13/14 遗留的真实 MainLoop 集成冒烟测试仍未做 |
+| 修订 26 | 新增屏幕状态浮窗（光圈，仿 Openless Capsule）。需求：语音状态机变化此前只落日志，用户说话过程中无屏幕级实时反馈；加一枚浮在右下角的 80×80 小圆点，跟随 IDLE/LISTEN/ASR/EXECUTE/TTS/AWAIT_CONFIRM/错误 变色变动画。**核对代码后纠正方案一处偏差**：方案 Step 8 说"改 build_voice.bat 加 overlay 资源"，但浮窗只在 GUI 角色显示、消费者是 build_gui.bat——overlay.html 该进 build_gui.bat 的 --add-data，build_voice.bat（纯语音 exe 不显示浮窗）只需 --hidden-import ui.state_emitter（它仍发送状态，无害）。架构：**单向状态推送复用修订 20 已有的 logs/voxctl-voice.out 通道**（voice_start 早把子进程 stdout/stderr 重定向到此），不开新端口/管道/socket——语音进程每次状态转换 print 一行 JSON，GUI 后台线程 tail-follow 该文件、parse、evaluate_js 推浮窗。新增独立 ui/ 包：state_protocol.py（encode_state_event/parse_line 纯函数 + 容错）、state_emitter.py（语音端 emit_state，发送端节流，失败静默不崩主循环）、state_tailer.py（GUI tail 线程 + 文件不存在等待 + rotate 重打开）、overlay_window.py（pywebview frameless 置顶浮窗 + ctypes WS_EX_NOACTIVATE 不抢焦点，说话时焦点留原应用）、static/overlay.html（单文件离线自足，CSS @keyframes 动画 + localStorage 存拖动位置）。**严守架构约束**：不改 core/state.py（State 枚举/LoopState 不动）、不改 main.py 主循环结构、不把推送塞进 LoopState.transition()（保持状态机纯）——钩子只挂 core/event_loop.py 各 _phase_* 入口。config.yaml 新增 ui.status_overlay（默认 true），关闭时 GUI 不起浮窗/tailer，语音功能完全不受影响。安全不变量不变：浮窗纯展示、不显示 api_key/绝对路径，GUI 边界仍只非破坏性。**补充落地决策两处**：(1) **VOXCTL_OVERLAY 环境变量作 emit 闸门**——state_emitter 只在此 env 为真时才产协议行，GUI（浮窗的唯一渲染方 + 唯一 tailer）在 config ui.status_overlay 为真时 `os.environ["VOXCTL_OVERLAY"]="1"`，语音子进程经 Popen 继承；这样独立 `run.bat` 跑语音（无 GUI）时 emitter 是纯 no-op，`@@VOXCTL_STATE@@` 协议行不污染开发控制台。(2) **浮窗位置存原生窗口坐标**——easy_drag 拖的是原生窗口、localStorage 抓不到，overlay_window 挂 window.events.moved 存 overlay_pos.json（老版本 pywebview 无 moved 则退化到 closing 时回读 window.x/y）。parse_line 加 `isinstance(line,str)` 硬化以兑现"任何脏输入不抛异常返回 None"的契约。**测试（tests/test_overlay.py，16 例全绿）**：state_protocol 编解码往返 + 日志噪声行定位 + 脏输入(None/int/bytes/半截 JSON)不抛；state_emitter env 闸门 + 同态 200ms 节流 + stdout=None 静默 + error/exit 事件；state_tailer 文件不存在等待 + tail 新行推假 window + 首次跳历史但新建文件从头读 + stop 幂等。全量回归 49 passed / 1 skipped 无回归（event_loop 各 _phase_* 钩子未破坏既有状态机测试）。overlay_window（需真起 pywebview + Windows HWND）留 frozen 冒烟，未进单测。exe 重打包留给用户按需触发。修订 13/14 遗留的真实 MainLoop 集成冒烟测试仍未做 |
+| 修订 27 | overlay 浮窗 state-asr 视觉换为 openless ThinkingDots 6 点圆环（用户需求：把 openless-all/app 里 [ThinkingDots.tsx](file:///D:/code/Program/openless-beta/openless-beta/openless-all/app/src/components/ThinkingDots.tsx) 的「6 彩点绕圆心旋转 + 呼吸」视觉用到 Voxctl 录音结束后的识别中提示）。背景：修订 26 的 overlay 视觉本就「仿 Openless Capsule」，但 state-asr 原实现是「蓝点 + 白缺口环 0.9s 旋转」（overlay.html 第 74-81 行），与 openless 全应用统一的思考视觉语言 ThinkingDots 不一致。**ThinkingDots.tsx 是 React+TSX，Voxctl overlay 是纯 HTML+CSS+原生 JS（离线自足，无 CDN/无构建），不能原样 import**，故将动画/色板/几何参数 1:1 翻译为等价纯 CSS。改动（仅 `ui/static/overlay.html` 单文件，纯 CSS+DOM，**不动**状态机协议/state_protocol/state_emitter/state_tailer/overlay_window，不改 core/state.py，不碰 build_gui.bat 的 --add-data 清单）：(1) 新增 `.thinking-dots` DOM（6 个 `<span>`）与对应 CSS——参数逐行翻译自 ThinkingDots.tsx 不改：6 色板 `#5b8def/#8b6ff2/#c96fd6/#e08787/#d9a75f/#5fb8a8`、外接圆 size 48px、dot = max(2.5, size\*0.17) ≈ 8.16px、radius = size\*0.31 ≈ 14.88px、6 点位置 `rotate(i*60deg) translateY(-14.88px)`、整体 `animation: ol-thinking-spin 1.7s linear infinite, ol-thinking-breathe 2.8s ease-in-out infinite`、`@keyframes ol-thinking-spin to rotate(360deg)`、`@keyframes ol-thinking-breathe 0%/100% scale 1 opacity 1 / 50% scale .82 opacity .8`、`@media (prefers-reduced-motion: reduce)` 关动画；(2) 改 `state-asr` 规则：隐藏原 `.dot`（蓝点）与 `.dot::before`（白缺口环），显示 `.thinking-dots`——asr 状态语义与协议不变，仅视觉换肤。安全不变量不变：浮窗仍纯展示、不显示敏感信息、状态机协议零改动、不引入新依赖。exe 重打包留给用户按需触发。修订 13/14 遗留的真实 MainLoop 集成冒烟测试仍未做 |
+| 修订 28 | 修 frozen exe 下浮窗永远停灰（IDLE）的 bug（用户 live 实测：打包后运行「椭圆边框 + 里面一个灰色圆形，还是老样子」，浮窗从不随状态变色/动画）。**根因**：`app.py` 的 `--windowed` frozen exe 无控制台，语音子进程 `sys.stdout`/`sys.stderr` 为 `None`，原 `_redirect_null_std()` 无脑把两者都重定向到 `os.devnull`。但父进程（GUI `voice_start`）已把子进程 OS 层 fd 1/2 指向 `logs/voxctl-voice.out`（修订 20 的通道，也是修订 26 tailer 读取的源）——子进程把 Python `sys.stdout` 换成 devnull 后，`emit_state` 的 `@@VOXCTL_STATE@@` 协议行全进黑洞，`voxctl-voice.out` 状态行为空，tailer 读不到任何状态，浮窗永远停在初始灰色 IDLE。**源码模式（`python app.py --voice`）有真 stdout 不走此路，故修订 26 源码测试全绿、frozen 必挂——正是修订 26 留的「overlay_window frozen 冒烟未做」的洞在此暴露**（浮窗视觉/协议/tailer 逻辑本身全对，唯独状态送不进来）。**修法**（仅改 `app.py`，不动 ui/ 任何模块、不动状态机协议、不动 gui.py 的写入端）：`_redirect_null_std()` → `_redirect_std(voice_role)` + `_reopen_fd(fd)` helper——语音角色用 `os.fdopen(fd, "w", encoding="utf-8", errors="replace", closefd=False)` 把 Python stdout/stderr **接回** fd 1/2（父进程已指向 voxctl-voice.out 的真实描述符），协议行才能落进文件；GUI 角色（无人读其 stdout）仍扔 devnull；`fdopen` 失败（极少数 fd 无效）兜底 devnull 保证 print 不崩。`main()` 改为先算 `voice_role = "--voice" in argv` 再重定向。**frozen 冒烟实测（2026-07-16）**：`build_gui.bat` 重打（首次因上一版 exe 还在跑锁着 `logs/voxctl-gui.log` 报 `WinError 32`，杀掉旧进程后 exit 0）；复刻 gui.py 启动方式（子进程 fd1 重定向到文件 + `VOXCTL_OVERLAY=1`）跑 `voxctl.exe --voice`，2 秒内 `voxctl-voice.out` 出现 `@@VOXCTL_STATE@@{"event":"state","state":"listen",...}` 协议行——**修复证成**（旧代码此处为空文件）；同流程确认 VAD onnx 从 `_internal/silero_vad.onnx` 加载、录音启动、主循环进 `run()` 发 LISTEN 全链路通（用假 key，停在 LISTEN 等语音，未到 LLM 不触发 401，符合预期）。安全不变量不变：只改进程 stdout 重定向目标，不碰白名单/二次确认/key 读取（仍 env var）/GUI 非破坏性边界；浮窗仍纯展示不显示敏感信息。overlay.html 与源码 MD5 一致（88A0200E…），确认非打包资源问题。修订 13/14 遗留的真实 MainLoop 集成冒烟测试仍未做 |
+| 修订 29 | 删掉浮窗「椭圆黑框」+ 位置固定（用户需求：那个椭圆框难看死了删掉，浮窗固定在一个位置）。**黑框根因**：修订 26 用「黑底 80×80 窗 + `SetWindowRgn(CreateEllipticRgn)` 裁成圆」来抠圆形，理由是当时注释「WebView2 透明背景不生效」。但窗口裁成 80px 圆、里面内容只有 60px（IDLE 灰圆）/48px（ASR 六彩点），中间露出的一圈黑底就是用户看到的「椭圆边框」。**先实测推翻旧结论**：一次性探针（transparent=True 窗 + 中央红圆 + 按 HWND 物理 rect 采样规避 DPI 坐标错位）证实本机 WebView2 + pywebview 6.2.1 `transparent=True` **真透明**——窗口四角=背后桌面色、中心=圆点色、无纯黑，「WebView2 透明不生效」是过时结论。**改法**（`ui/overlay_window.py` + `ui/static/overlay.html` 两个文件，**不动**状态机协议/state_protocol/state_emitter/state_tailer/core/state.py，不碰 build_gui.bat 的 --add-data 清单）：(1) **透明窗去黑框**——`create_window` 加 `transparent=True`，删掉 `_apply_no_activate` 里整段 `GetClientRect`+`CreateEllipticRgn`+`SetWindowRgn` 圆形裁剪（透明后不需要，圆点直接靠 CSS `border-radius` 浮在桌面）；`overlay.html` 的 `html,body` 背景从 `#000000` 改 `transparent`；`background_color="#000000"` 保留仅作非透明后端兜底。(2) **位置固定**——`easy_drag=True`→`False`（关拖动），位置永远取 `_default_bottom_right()`（屏右下角），删掉整套拖动位置持久化（`_pos_file`/`_load_pos`/`save_pos`/`overlay_pos.json` 读写 + `moved`/`closing` 事件回调 + `json`/`Optional` import + `__all__` 去掉 `save_pos`）。**真窗口冒烟（2026-07-16）**：起 overlay 透明窗，按 HWND 物理 rect 采样——四角 RGB(240,240,240)=背后窗口色（**非纯黑**，黑框消失）、中心 RGB(154,160,166)=IDLE 灰圆点（`--idle #9AA0A6` 正是 154,160,166，圆点在），位置落屏右下角。`tests/test_overlay.py` 16 例全绿（协议/emitter/tailer 逻辑未动）。安全不变量不变：浮窗仍纯展示不显示敏感信息、仍 WS_EX_NOACTIVATE 不抢焦点、状态机协议零改动、不引新依赖。`build_gui.bat` 重打后交用户双击验证动画（红脉冲/六彩点/紫环/绿波纹）。修订 13/14 遗留的真实 MainLoop 集成冒烟测试仍未做 |
+| 修订 30 | 推翻修订 29 的透明结论，改居中正圆裁剪彻底消掉椭圆框（用户需求同修订 29：删椭圆框 + 固定位置——修订 29 的透明方案是**误判**，实测椭圆框仍在）。**修订 29 误判溯源**：其「透明真生效」探针把窗口摆到了屏外/错位（DPI 感知不一致），GetPixel 采到的是窗外壁纸而非窗内，误读 RGB(240,240,240) 为「透明」。本次干净的屏内 DPI-aware 探针 + 截图证伪：`transparent=True` 露出的是 WinForms Form **不透明白色** BackColor（pywebview 6.2.1 winforms 后端不设 TransparencyKey，桌面透不过来）；layered 窗 + `SetLayeredWindowAttributes(LWA_COLORKEY)` 也无效（WebView2 内容画在子表面，父窗口色键刀不到）。**两条透明路一律死**，`SetWindowRgn` 圆形裁剪是唯一 WebView2 无关、DWM 强制生效的抠圆手段。**椭圆真根因（修订 29 没查到的那层）**：pywebview / WinForms **不给方窗**——请求 80×80，1.5× DPI 下 GetClientRect 实测 **180×120 物理 = 120×80 逻辑**（宽被 WinForms 最小宽单向撑大，`min_size=(80,80)` 压不住），在这个非方矩形上 `CreateEllipticRgn(0,0,cw,ch)` 裁出的必然是**椭圆**。**改法**（仅 `ui/overlay_window.py` + `ui/static/overlay.html`，**不动**状态机协议/state_protocol/state_emitter/state_tailer/overlay_window 之外模块/core/state.py，不碰 build_gui.bat 的 --add-data 清单）：(1) **不强求方窗**（强求不来），`_apply_no_activate` 改在真实客户区上取 `d=min(cw,ch)` 做**居中正圆** `CreateEllipticRgn(ox,oy,ox+d+1,oy+d+1)`（`ox=(cw-d)//2` 水平居中）——无论窗口宽高比裁出来永远是圆；`transparent=False` 回退（透明不可行），`background_color="#000000"`（裁剪外不可见）；`SetWindowPos` 定位用**真实**客户区尺寸 `_workarea_bottom_right(cw,ch)`。(2) **overlay.html** `html,body` 背景从 `transparent` 改回不透明、状态色**铺满整窗**（整窗被裁成圆即那枚圆点，不再用 60px 内圆留底色圈）；`.dot`（承载 EXECUTE 旋转环 / TTS 波形的层）从 `100%` 改**固定 80×80 flex 居中**，与裁剪圆同心，否则在 120×80 窗上环/波会成椭圆且偏心；LISTEN 脉冲去掉 box-shadow 外发光（超出圆会被裁掉，不透明圆窗无法外发光，改纯 scale 呼吸）。**真窗口冒烟（2026-07-16）**：DPI-aware 探针 + BitBlt 截图裁窗区——客户区 180×120、`GetWindowRgn` complexity=3（裁剪已生效）、位置 (2360,1300) 正屏右下角（2560×1440 工作区避开任务栏）；截图目视为**一枚正圆灰点、无椭圆、无边框、四角露桌面**，修订 29 的椭圆框消除证成。`tests/test_overlay.py` 16 例全绿、全量 49 passed/1 skipped 无回归（协议/emitter/tailer/状态机测试未动）。模块 docstring 同步纠正修订 29 的透明误判、记录 min_size 压不住 WinForms 最小宽的真根因。安全不变量不变：浮窗仍纯展示不显示敏感信息、仍 WS_EX_NOACTIVATE 不抢焦点、状态机协议零改动、不引新依赖。`build_gui.bat` 重打（本次已触发）后交用户双击验证动画（红脉冲/六彩点/紫环/绿波纹）。修订 13/14 遗留的真实 MainLoop 集成冒烟测试仍未做 |
+| 修订 31 | 浮窗位置从右下角改为**底部居中并上移**（用户需求：位置移到屏幕中间往下、任务栏上方，逐步微调到"再往上一点"）。改 `ui/overlay_window.py`：`_workarea_bottom_right` → `_workarea_bottom_center`（水平取工作区中点 `rect.left + (宽-win_w)//2`，垂直 `rect.bottom - win_h - _BOTTOM_GAP`）；新增常量 `_BOTTOM_GAP = 140`（距工作区底边留白，把浮窗抬进屏幕中下区域，任务栏上方）；`_MARGIN` 保留兼容不再用于垂直。定位仍用 `SystemParametersInfo(SPI_GETWORKAREA)` 取工作区（避开任务栏）、`SetWindowPos` 用真实客户区尺寸，DPI 语义与同进程一致。圆形裁剪 / NOACTIVATE / 固定不可拖 逻辑一律不动。安全不变量不变。测试未动（位置是纯窗口坐标，无协议/状态变化）。exe 重打包留给用户按需触发。修订 13/14 遗留的真实 MainLoop 集成冒烟测试仍未做 |
+| 修订 32 | 浮窗球体质感重做为 iOS Siri 哑光通透质感（用户需求：修订 30/31 的球体是「纯色径向渐变 + 单点高光」像塑料球，要求做成 iOS 控制中心 Siri 动画球体那种表面——次表面散射 + 细密噪点 + 多层柔和高光 + 边缘渐隐）。**只改 `ui/static/overlay.html` 单文件视觉层**（`.dot` 的 background / box-shadow / mask），**不动**状态机协议/state_protocol/state_emitter/state_tailer/overlay_window/core/state.py、不碰 build_gui.bat 的 --add-data 清单、不引新依赖。四条一起做：(1) **次表面散射**——多层径向渐变叠加，含一层「内部透光核」（球心偏上 `color-mix 52%色+48%白` 透出的柔光），光像从球内散出而非表面反光；(2) **哑光噪点**——内联一张 `feTurbulence`（`baseFrequency 0.9`）灰噪点 SVG（data URI，**离线自足无新依赖**），用 `background-blend-mode: soft-light` 与下方所有渐变层混合，打破纯色渐变的塑料感（"毛细血管质感"核心），并顺带抖掉小尺寸渐变色带（banding）；(3) **柔和高光**——去掉廉价白点 box-shadow，改大而淡的椭圆镜面柔光多层过渡；(4) **边缘渐隐**——加 `mask: radial-gradient(closest-side, #000 92%, 透明 100%)` 外圈 8% 羽化，消掉 `SetWindowRgn` 硬圆的生硬轮廓线，并去掉原 `inset 1px 白边`（廉价轮廓线来源）。配色驱动统一为单变量 `--c`（各状态只改 `--c`，玻璃质感对每色一致）；`--asr` 从蓝改深板岩 `#3a3f4a`。ThinkingDots（修订 27）/ EXECUTE 环 / TTS 波 / 动画 keyframes 一律不动。安全不变量不变：浮窗仍纯展示不显示敏感信息、状态机协议零改动。质感是否达标待用户 live 确认（若仍粗糙再单独调 `baseFrequency`/blend 强度）。exe 重打包留给用户按需触发。修订 13/14 遗留的真实 MainLoop 集成冒烟测试仍未做 |
+| 修订 33 | 浮窗支持点击 + 全局热键 toggle 语音启停（用户需求：点击光圈启动语音、再次点击关闭；支持自定义快捷键——经 AskUserQuestion 确认范围是「点击 + 全局键盘热键」两者都做）。**这是浮窗从「纯展示」到「可交互」的首次松动**，故先改 §8.11「纯展示」约束 + §6 GUI 边界 + §3 目录树 + config 骨架，再落代码（先文档后实现）。定性：点击/热键都只是 §6/§19 早已许可的**非破坏性生命周期操作**（启停 = 拉起/杀掉语音子进程，免二次确认），走同一套 `toggle_voice`（复用修订 20 的启停逻辑与四道失败防线），不新增任何能力面——不暴露关闭应用/删文件/跑命令。**关键技术点**：(1) **点击可用且不抢焦点并存**——`WS_EX_NOACTIVATE` 只阻止「点击激活成前台」，鼠标消息照常投递给光标下窗口 → WebView2 收到 → JS `click` 触发；「点击 toggle」与「说话时焦点留原应用」两约束同时成立。(2) **全局热键**——`ui/hotkey.py` 用 Win32 `RegisterHotKey(NULL,id,mods,vk)` + 独立 daemon 线程跑 `GetMessageW` 收 `WM_HOTKEY`，停止用 `PostThreadMessageW(WM_QUIT)`；**纯 ctypes（stdlib），不引新依赖、非 IPC/socket/管道**；热键字符串（如 `ctrl+alt+v`）存 `config.yaml` 的 `ui.hotkey`，GUI 可改写入 `voxctl.local.yaml` 的 `ui` 块覆盖，热键被占用（RegisterHotKey 失败）回报错误不静默；非 Windows 整体 no-op。(3) **停止归灰 / 失败红闪**——语音停后不再产状态行，toggle 停止路径由 GUI 侧直接 `evaluate_js` 推 `exit` 事件把光圈打回 IDLE 灰；启动失败推 `error`（红闪），因光圈太小放不下失败文字，详细原因仍需开 GUI 看（GUI 按钮路径失败反馈不变）。改动：新增 `ui/hotkey.py`；编辑 `ui/static/overlay.html`（body 加 click → `window.pywebview.api.toggle()`，无桥时静默 no-op，加 `cursor:pointer`，视觉层不动）、`ui/overlay_window.py`（`create_overlay_window` 支持传 `js_api` 桥）、`webui/gui.py`（`Api.toggle_voice` + `OverlayBridge` 小类只暴露 `toggle` + `run_gui` 建 toggle 闭包供浮窗桥与热键共用 + `get_settings`/`save_settings` 加 `hotkey` 走 `voxctl.local.yaml` 的 ui 块 + 关窗停热键监听）、`webui/static/index.html`（语音控制页加热键设置输入框）、`config.yaml`（`ui` 块加 `hotkey`/`hotkey_enabled`）。安全不变量核对：仍 WS_EX_NOACTIVATE 不抢焦点、浮窗仍不显示敏感信息、仅非破坏性、无新依赖、无 IPC/socket/管道、不碰 core/state.py / 主循环 / LoopState.transition。测试：新增 `tests/test_hotkey.py`（热键字符串解析纯函数 + toggle 决策逻辑，RegisterHotKey/消息循环留 frozen 冒烟）；`test_overlay.py` 保持全绿（协议/emitter/tailer 未动）。exe 重打包 + 真窗口点击/热键冒烟留给用户按需触发。修订 13/14 遗留的真实 MainLoop 集成冒烟测试仍未做 |
