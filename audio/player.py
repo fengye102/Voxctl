@@ -89,18 +89,6 @@ class AudioPlayer:
                 self._playing = False
 
     # ------------------------------------------------------------------
-    async def play_bytes(self, pcm_bytes: bytes, sample_rate: int = 24000) -> None:
-        """播放原始 16-bit PCM 字节流（兼容旧接口）。
-
-        bytes → int16 numpy → float32 numpy → play()
-        """
-        if not pcm_bytes:
-            return
-        arr_int16 = np.frombuffer(pcm_bytes, dtype=np.int16)
-        arr_float32 = arr_int16.astype(np.float32) / 32768.0
-        await self.play(arr_float32, sample_rate=sample_rate)
-
-    # ------------------------------------------------------------------
     def stop(self) -> None:
         """立即停止播放（打断信号触发，CLAUDE.md §1 架构图）。
 

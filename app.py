@@ -10,8 +10,14 @@
 语音模块（不加载 torch/whisper）；语音角色 import main 委托现有 main.main()。GUI 用
 subprocess 拉起 `sys.executable --voice` 作为独立子进程（§4/§16：语音主循环不依赖 GUI）。
 
-frozen --windowed 下无控制台，sys.stdout/stderr 为 None——先重定向到 devnull，避免
-print()/日志在 emit 时崩；真实日志走 logs/ 文件，GUI 从文件回显。
+frozen --windowed 下无控制台，sys.stdout/stderr 为 None——需重定向避免 print/日志崩。
+但两种角色的重定向目标不同（修订 28）：
+    - GUI 角色：无人读它的 stdout，扔 devnull 即可。
+    - 语音角色：父进程（GUI voice_start）已把子进程 OS 层 fd 1/2 指向
+      logs/voxctl-voice.out，若这里再把 sys.stdout 换成 devnull，emit_state 的
+      状态协议行就进了黑洞、浮窗永远收不到状态。必须用 os.fdopen(1) 把 Python
+      stdout **接回**那个真实 fd，协议行才能落进文件供 GUI tailer 读。
+真实日志仍走 logs/ 文件，GUI 从文件回显。
 """
 
 from __future__ import annotations
@@ -21,10 +27,33 @@ import sys
 from pathlib import Path
 
 
-def _redirect_null_std() -> None:
-    """frozen --windowed：sys.stdout/stderr 为 None 时重定向到 devnull，避免 print 崩。"""
+def _reopen_fd(fd: int):
+    """把某个 OS 文件描述符包成带 UTF-8 编码的 text stream。失败返回 None。"""
+    try:
+        return os.fdopen(fd, "w", encoding="utf-8", errors="replace", closefd=False)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _redirect_std(voice_role: bool) -> None:
+    """frozen --windowed：sys.stdout/stderr 为 None 时按角色重定向。
+
+    voice_role=True：接回 fd 1/2（父进程已指向 voxctl-voice.out），让 emit_state
+      的协议行真正写进文件——这是浮窗能收到状态的前提。
+    voice_role=False（GUI）：无人读，扔 devnull。
+    """
     if sys.stdout is not None and sys.stderr is not None:
         return
+
+    if voice_role:
+        if sys.stdout is None:
+            sys.stdout = _reopen_fd(1)
+        if sys.stderr is None:
+            sys.stderr = _reopen_fd(2)
+        # fdopen 失败（极少数情况 fd 无效）时兜底 devnull，保证 print 不崩
+        if sys.stdout is not None and sys.stderr is not None:
+            return
+
     try:
         null = open(os.devnull, "w", encoding="utf-8")
     except Exception:  # noqa: BLE001
@@ -43,11 +72,13 @@ def _chdir_exe_dir() -> None:
 
 
 def main() -> int:
-    _redirect_null_std()
+    argv = sys.argv[1:]
+    voice_role = "--voice" in argv
+
+    _redirect_std(voice_role)
     _chdir_exe_dir()
 
-    argv = sys.argv[1:]
-    if "--voice" in argv:
+    if voice_role:
         # 语音角色：委托现有 main.main()（剥掉 --voice，其余参数如 --config 透传）
         sys.argv = [sys.argv[0]] + [a for a in argv if a != "--voice"]
         import main as voice_main

@@ -237,3 +237,13 @@ def _ensure_object_schema(schema_dict: dict) -> None:
     schema_dict.setdefault("type", "object")
     schema_dict.setdefault("properties", {})
     schema_dict.setdefault("required", [])
+
+
+def safe_model_dump(intent: ParsedIntent) -> dict:
+    """安全地把 intent 转 dict（pydantic 模型用 model_dump，其他返回空）。"""
+    if hasattr(intent, "model_dump"):
+        try:
+            return intent.model_dump()
+        except Exception:  # noqa: BLE001
+            return {}
+    return {}

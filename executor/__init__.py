@@ -47,13 +47,11 @@ from nlu.schema import (
     QuerySystemIntent,
     RunCommandIntent,
     UnknownIntent,
+    safe_model_dump,
 )
 
 _LOG = logging.getLogger(__name__)
 
-
-class ExecutorError(Exception):
-    """执行模块错误基类。"""
 
 
 # webui 控制台维护的用户别名扩展表（修订 16）。独立于 config.yaml 是因为
@@ -278,7 +276,7 @@ class Executor:
             "timestamp": datetime.now().isoformat(timespec="seconds"),
             "raw_text": raw_text,
             "intent": getattr(intent, "intent", None),
-            "intent_detail": _safe_model_dump(intent),
+            "intent_detail": safe_model_dump(intent),
             "confirmed": confirmed,
             "action_type": result.action_type,
             "success": result.success,
@@ -298,20 +296,9 @@ class Executor:
             _LOG.warning("failed to write audit log to %s: %s", self._log_path, exc)
 
 
-def _safe_model_dump(intent: ParsedIntent) -> dict:
-    """安全地把 intent 转 dict（pydantic 模型用 model_dump，其他返回空）。"""
-    if hasattr(intent, "model_dump"):
-        try:
-            return intent.model_dump()
-        except Exception:
-            return {}
-    return {}
-
-
 __all__ = [
     "ExecutionResult",
     "Executor",
-    "ExecutorError",
     "load_user_apps",
     "USER_APPS_FILE",
 ]

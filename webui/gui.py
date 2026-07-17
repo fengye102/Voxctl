@@ -62,6 +62,13 @@ _AUDIT_LOG = _PROJECT_ROOT / "logs" / "actions.log"
 _INDEX_HTML = _STATIC_DIR / "index.html"
 _CONFIG_PATH = _PROJECT_ROOT / "config.yaml"
 
+# 状态浮窗静态资源（修订 26 / §8.11）：frozen 时 build_gui.bat 用 --add-data ...;ui_static
+# 解包到 _MEIPASS/ui_static，源码时在 ui/static。浮窗只在 GUI 角色渲染（消费者是 GUI）。
+if getattr(sys, "frozen", False):
+    _OVERLAY_HTML = Path(getattr(sys, "_MEIPASS", ".")) / "ui_static" / "overlay.html"
+else:
+    _OVERLAY_HTML = _PROJECT_ROOT / "ui" / "static" / "overlay.html"
+
 # 别名路径只允许这两类目标：可执行文件和快捷方式
 _ALLOWED_SUFFIXES = {".exe", ".lnk"}
 
@@ -194,6 +201,50 @@ def _load_config_llm() -> dict:
     return _load_config_section("llm")
 
 
+def _overlay_enabled() -> bool:
+    """读 config.yaml 的 ui.status_overlay（修订 26）。缺省 True。失败按 True 处理。"""
+    try:
+        blk = _load_config_section("ui")
+        val = blk.get("status_overlay", True)
+        return bool(val)
+    except Exception:  # noqa: BLE001
+        return True
+
+
+# 全局热键默认值（修订 33）：config.yaml ui 块缺字段时兜底
+_DEFAULT_HOTKEY = "ctrl+alt+v"
+
+
+def _effective_hotkey() -> dict:
+    """热键生效设置：config.yaml 的 ui 块叠加 voxctl.local.yaml 的 ui 覆盖（修订 33）。
+
+    热键是 GUI 侧生命周期配置（不进语音子进程的 config 覆盖链），故这里直接读、
+    本地覆盖优先。返回 {hotkey, enabled, overridden}。任何读取失败退回默认值 + 启用。
+    """
+    hotkey = _DEFAULT_HOTKEY
+    enabled = True
+    overridden = False
+    try:
+        blk = _load_config_section("ui")
+        if isinstance(blk.get("hotkey"), str) and blk["hotkey"].strip():
+            hotkey = blk["hotkey"].strip()
+        if "hotkey_enabled" in blk:
+            enabled = bool(blk["hotkey_enabled"])
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        local = load_local_section("ui")
+        if isinstance(local.get("hotkey"), str) and local["hotkey"].strip():
+            hotkey = local["hotkey"].strip()
+            overridden = True
+        if "hotkey_enabled" in local:
+            enabled = bool(local["hotkey_enabled"])
+            overridden = True
+    except Exception:  # noqa: BLE001
+        pass
+    return {"hotkey": hotkey, "enabled": enabled, "overridden": overridden}
+
+
 class Api:
     """pywebview js_api：前端用 window.pywebview.api.<method>() 调用。
 
@@ -210,6 +261,7 @@ class Api:
         self._voice_lock = threading.Lock()
         self._voice_user_stopped = False   # 区分"用户主动停"与"意外崩溃退出"（修订 20）
         self._voice_log_fh = None          # 子进程 stdout/stderr 重定向的文件句柄
+        self._toggle_lock = threading.Lock()  # 点击/热键 toggle 串行化（修订 33）
 
     @property
     def _state(self) -> ConsoleState:
@@ -293,6 +345,7 @@ class Api:
             _load_config_section("asr"), "asr", _ASR_OVERRIDE_FIELDS)
         tts = effective_section_settings(
             _load_config_section("tts"), "tts", _TTS_OVERRIDE_FIELDS)
+        hk = _effective_hotkey()
         # 不回传 api_key 明文；前端密码框始终留空，靠 has_local_key 提示"已设置"
         return {
             "provider": eff["provider"],
@@ -306,21 +359,35 @@ class Api:
             "asr_overridden": asr["overridden"],
             "tts_voice": tts["voice"],
             "tts_overridden": tts["overridden"],
+            # 全局热键（修订 33）：改热键需重启 GUI 才生效（监听器 GUI 启动时注册）
+            "hotkey": hk["hotkey"],
+            "hotkey_enabled": hk["enabled"],
+            "hotkey_overridden": hk["overridden"],
             "voice_running": self._is_voice_running(),
         }
 
     def save_settings(self, provider: str = "", model: str = "",
                       base_url: str = "", api_key: str = "",
-                      asr_model: str = "", tts_voice: str = "") -> dict:
+                      asr_model: str = "", tts_voice: str = "",
+                      hotkey: str = "", hotkey_enabled: Optional[bool] = None) -> dict:
         provider = (provider or "").strip()
         model = (model or "").strip()
         base_url = (base_url or "").strip()
         api_key = (api_key or "").strip()
         asr_model = (asr_model or "").strip()
         tts_voice = (tts_voice or "").strip()
+        hotkey = (hotkey or "").strip()
 
         if provider and provider not in ("anthropic", "openai"):
             return {"ok": False, "error": "provider 只能是 anthropic 或 openai"}
+
+        # 热键改动先校验格式（修订 33），非法直接拒绝，不写坏值进本地文件
+        if hotkey:
+            try:
+                from ui.hotkey import parse_hotkey
+                parse_hotkey(hotkey)
+            except Exception as exc:  # noqa: BLE001
+                return {"ok": False, "error": f"热键格式非法：{exc}"}
 
         llm: dict = {}
         if provider:
@@ -344,17 +411,25 @@ class Api:
         if tts_voice:
             tts["voice"] = tts_voice
 
+        # ui 热键覆盖（修订 33）：hotkey 非空则写；hotkey_enabled 显式传才写
+        ui = dict(load_local_section("ui"))
+        if hotkey:
+            ui["hotkey"] = hotkey
+        if hotkey_enabled is not None:
+            ui["hotkey_enabled"] = bool(hotkey_enabled)
+
         try:
-            save_local_settings({"llm": llm, "asr": asr, "tts": tts})
+            save_local_settings({"llm": llm, "asr": asr, "tts": tts, "ui": ui})
         except Exception as exc:  # noqa: BLE001
             _LOG.exception("save_settings failed")
             return {"ok": False, "error": f"保存失败：{exc}"}
         _LOG.info("[gui] settings saved: provider=%s model=%s base_url=%s key=%s "
-                  "asr=%s tts=%s",
+                  "asr=%s tts=%s hotkey=%s",
                   provider or "-", model or "-", base_url or "-",
                   "set" if (api_key or existing) else "-",
-                  asr_model or "-", tts_voice or "-")
-        return {"ok": True}
+                  asr_model or "-", tts_voice or "-", hotkey or "-")
+        # 热键改了需重启 GUI 才重新注册；回传标记让前端提示用户
+        return {"ok": True, "hotkey_restart_required": bool(hotkey) or hotkey_enabled is not None}
 
     # ---- 语音子进程启停（修订 20：加固失败反馈，不再静默崩溃）------------
     def voice_start(self) -> dict:
@@ -452,6 +527,23 @@ class Api:
     def _is_voice_running(self) -> bool:
         return self._voice_proc is not None and self._voice_proc.poll() is None
 
+    def toggle_voice(self) -> dict:
+        """点击光圈 / 全局热键的统一入口（修订 33）：跑着就停，停着就启。
+
+        返回 voice_start / voice_stop 的结果，附带 action 字段（"started"/"stopped"）
+        供调用方（浮窗桥 / 热键闭包）决定是否 toast。启停本身是非破坏性生命周期操作
+        （§6 修订 19/33），不需二次确认。加锁避免点击与热键并发触发时启停打架。"""
+        with self._toggle_lock:
+            if self._is_voice_running():
+                res = self.voice_stop()
+                res["action"] = "stopped"
+            else:
+                res = self.voice_start()
+                res["action"] = "started"
+            _LOG.info("[gui] toggle_voice -> %s (ok=%s)",
+                      res.get("action"), res.get("ok"))
+            return res
+
     def _close_voice_log(self) -> None:
         fh = self._voice_log_fh
         self._voice_log_fh = None
@@ -481,6 +573,26 @@ class Api:
                     return s[:300]
             return lines[-1].strip()[:300]
         return "未知原因，请查看 logs/voxctl.log"
+
+
+class OverlayBridge:
+    """状态浮窗（光圈）的 js_api 桥（修订 33）：**只**暴露 toggle()。
+
+    浮窗是纯展示 + 一个非破坏性 toggle 动作，绝不把主控制台 Api 的别名/设置/日志方法
+    暴露给浮窗前端（那些不需要，也不该从一枚屏幕小圆点触及）。点击光圈 → overlay.html
+    的 click 处理 → pywebview.api.toggle() → 这里 → run_gui 注入的 toggle 闭包。
+    """
+
+    def __init__(self, on_toggle) -> None:
+        self._on_toggle = on_toggle
+
+    def toggle(self) -> dict:
+        try:
+            res = self._on_toggle()
+            return res if isinstance(res, dict) else {"ok": True}
+        except Exception as exc:  # noqa: BLE001
+            _LOG.exception("overlay toggle failed")
+            return {"ok": False, "error": str(exc)}
 
 
 def _setup_gui_logging() -> None:
@@ -521,14 +633,99 @@ def run_gui() -> int:
         background_color="#131009",
     )
 
-    # 窗口关闭时杀掉还在跑的语音子进程，避免残留
+    # 状态浮窗（修订 26 / §8.11）：config ui.status_overlay 为真才起。
+    # 浮窗窗口 + tailer 线程都是可选增强，任何一步失败都不影响主控制台。
+    overlay_window = None
+    tailer = None
+    hotkey_listener = None
+
+    # 点击光圈 / 全局热键的共用 toggle 闭包（修订 33）：调 api.toggle_voice()，
+    # 停止时给浮窗推一个 exit 事件让它立刻归灰（启动时状态由语音子进程经 tailer 推）。
+    def _toggle_and_sync() -> dict:
+        res = api.toggle_voice()
+        if res.get("action") == "stopped" and overlay_window is not None:
+            try:
+                from ui.state_protocol import encode_event
+                # encode_event 产的是完整协议行；浮窗 setState 只吃 JSON 体，剥掉前缀
+                from ui.state_protocol import LINE_PREFIX
+                line = encode_event("exit")
+                body = line[len(LINE_PREFIX):] if line.startswith(LINE_PREFIX) else line
+                overlay_window.evaluate_js(
+                    "window.setState(%s)" % json.dumps(body))
+            except Exception:  # noqa: BLE001
+                pass
+        return res
+
+    if _overlay_enabled():
+        # 置环境变量作 emit 闸门（state_emitter 只在 VOXCTL_OVERLAY 为真时发协议行），
+        # 语音子进程经 Popen 继承此 env；关闭浮窗则语音端不产状态行，不污染控制台。
+        os.environ["VOXCTL_OVERLAY"] = "1"
+        try:
+            from ui.overlay_window import create_overlay_window
+            from ui.state_tailer import StateTailer
+            if _OVERLAY_HTML.is_file():
+                overlay_window = create_overlay_window(
+                    _OVERLAY_HTML, _PROJECT_ROOT,
+                    js_api=OverlayBridge(_toggle_and_sync),  # 修订 33：点击 toggle 桥
+                )
+                tailer = StateTailer(_VOICE_OUT_LOG, overlay_window)
+            else:
+                _LOG.warning("overlay.html not found at %s, overlay disabled", _OVERLAY_HTML)
+        except Exception:  # noqa: BLE001
+            _LOG.exception("failed to create status overlay (non-fatal)")
+            overlay_window = None
+            tailer = None
+
+    # 全局热键 toggle（修订 33）：config ui.hotkey_enabled 为真才注册。
+    # 注册失败（热键被占用 / 非 Windows）只记日志、不影响 GUI——点击光圈仍可 toggle。
+    hk = _effective_hotkey()
+    if hk["enabled"]:
+        try:
+            from ui.hotkey import HotkeyListener
+            hotkey_listener = HotkeyListener(on_trigger=_toggle_and_sync)
+            err = hotkey_listener.start(hk["hotkey"])
+            if err:
+                _LOG.warning("global hotkey not active: %s", err)
+            else:
+                _LOG.info("global hotkey registered: %s", hk["hotkey"])
+        except Exception:  # noqa: BLE001
+            _LOG.exception("failed to start hotkey listener (non-fatal)")
+            hotkey_listener = None
+
+    # 窗口关闭时杀掉还在跑的语音子进程，避免残留；停 tailer 线程；关浮窗；停热键
     def _on_closing():
+        if hotkey_listener is not None:
+            try:
+                hotkey_listener.stop()
+            except Exception:  # noqa: BLE001
+                pass
+        if tailer is not None:
+            try:
+                tailer.stop()
+            except Exception:  # noqa: BLE001
+                pass
+        if overlay_window is not None:
+            try:
+                overlay_window.destroy()
+            except Exception:  # noqa: BLE001
+                pass
         api.voice_stop()
 
     try:
         window.events.closing += _on_closing
     except Exception:  # noqa: BLE001
         pass
+
+    # tailer 要等 pywebview 事件循环起来、浮窗能 evaluate_js 才启动
+    def _on_shown():
+        if tailer is not None:
+            tailer.start()
+
+    if overlay_window is not None:
+        try:
+            overlay_window.events.shown += _on_shown
+        except Exception:  # noqa: BLE001
+            pass
 
     try:
         webview.start()
@@ -537,6 +734,18 @@ def run_gui() -> int:
         print(f"[错误] GUI 启动失败：{exc}", file=sys.stderr)
         return 1
     finally:
+        if hotkey_listener is not None:
+            try:
+                hotkey_listener.stop()
+            except Exception:  # noqa: BLE001
+                pass
+        if tailer is not None:
+            tailer.stop()
+        if overlay_window is not None:
+            try:
+                overlay_window.destroy()
+            except Exception:  # noqa: BLE001
+                pass
         api.voice_stop()  # 兜底：确保退出时不留语音子进程
     return 0
 

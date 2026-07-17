@@ -33,9 +33,6 @@ from nlu.schema import OpenFileIntent
 _LOG = logging.getLogger(__name__)
 
 
-class FileOpsError(Exception):
-    """文件操作模块错误基类。"""
-
 
 # 位置关键词 → 目录名匹配规则。键是用户口头可能说的中文词，
 # 值是白名单目录 Path.name 需要匹配的关键词（小写比较）。

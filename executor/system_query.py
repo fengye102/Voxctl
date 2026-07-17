@@ -22,9 +22,6 @@ from executor import ExecutionResult
 _LOG = logging.getLogger(__name__)
 
 
-class SystemQueryError(Exception):
-    """系统查询模块错误基类。"""
-
 
 class SystemQuery:
     """查询系统资源状态。无状态，可直接复用。"""

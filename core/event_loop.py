@@ -50,8 +50,10 @@ from nlu.schema import (
     ExitProgramIntent,
     ParsedIntent,
     UnknownIntent,
+    safe_model_dump,
 )
 from tts.edge_tts_engine import TTSEngine, format_result
+from ui import state_emitter
 
 _LOG = logging.getLogger(__name__)
 
@@ -170,6 +172,7 @@ class MainLoop:
         """启动主循环。阻塞调用，直到 ExitProgramIntent 或 Ctrl+C。"""
         self._loop = asyncio.get_event_loop()
         self._state.transition(State.LISTEN)
+        state_emitter.emit_state(State.LISTEN)
 
         # 启动录音（sounddevice 回调线程 → asyncio.Queue）
         try:
@@ -214,6 +217,7 @@ class MainLoop:
             except Exception as exc:
                 _LOG.exception("main loop iteration failed (state=%s)", self._state.state.value)
                 # 出错时播报一句简短提示，然后回到 LISTEN，不让循环崩
+                state_emitter.emit_error("出错了")
                 try:
                     await self._tts_engine.speak("出错了，请再说一次")
                 except Exception:
@@ -226,6 +230,7 @@ class MainLoop:
 
     async def _phase_listen(self) -> None:
         """LISTEN：从队列取音频块 → VAD 处理 → emit 语音片段 → 切到 ASR。"""
+        state_emitter.emit_state(State.LISTEN)
         chunk = await self._audio_queue.get()
         segment = self._vad.process_chunk(chunk, mode=VADMode.LISTEN)
         if segment is not None:
@@ -241,6 +246,7 @@ class MainLoop:
 
     async def _phase_asr(self) -> None:
         """ASR：把语音片段转写为文本，然后做意图解析，切到 EXECUTE。"""
+        state_emitter.emit_state(State.ASR)
         if self._pending_audio is None:
             self._state.transition(State.LISTEN)
             return
@@ -272,6 +278,9 @@ class MainLoop:
                   result.duration_s, result.elapsed_s)
         print(f"[你] {text}")
 
+        # 意图解析阶段视觉上归 EXECUTE（旋转环），并把识别文本带给浮窗展示
+        state_emitter.emit_state(State.EXECUTE, text=text)
+
         # 意图解析（同步 LLM 调用，丢线程池）
         try:
             intent = await asyncio.to_thread(self._intent_parser.parse, text)
@@ -295,6 +304,7 @@ class MainLoop:
 
     async def _phase_execute(self) -> None:
         """EXECUTE：执行意图，根据结果决定下一步。"""
+        state_emitter.emit_state(State.EXECUTE)
         intent = self._pending_intent
         raw_text = self._pending_text or ""
         self._pending_intent = None
@@ -365,6 +375,12 @@ class MainLoop:
             self._state.transition(State.LISTEN)
             return
 
+        # 浮窗：执行失败/未听懂的结果归"错误"（红闪烁），否则 TTS（绿波形）
+        if not result.success:
+            state_emitter.emit_error(result.error or "出错了")
+        else:
+            state_emitter.emit_state(State.TTS)
+
         # 启动打断监听（与 speak_result 并发）
         self._interrupt_coord.reset()
         monitor_task = asyncio.create_task(
@@ -422,11 +438,13 @@ class MainLoop:
             # 修订 14：exit_requested 延迟到"再见"正常播完才置位。
             # EXECUTE 阶段置位会让主循环 while 在 TTS 前 break，播报被跳过。
             _LOG.info("退出播报正常完成，置 exit_requested，主循环退出")
+            state_emitter.emit_exit()
             self._state.exit_requested = True
             return  # run() 的 while 会 break
 
         if self._state.pending is not None:
             # 刚播完"确定要...吗？"，切到等待确认
+            state_emitter.emit_state(State.AWAIT_CONFIRM)
             self._state.transition(State.AWAIT_CONFIRM)
         else:
             self._state.rounds_completed += 1
@@ -439,6 +457,7 @@ class MainLoop:
         这里只是阻塞在音频队列上等下一句话，VAD 切片后切到 ASR。
         """
         # 和 _phase_listen 一样，只是状态标记不同（让 _handle_confirm_response 知道现在是确认阶段）
+        state_emitter.emit_state(State.AWAIT_CONFIRM)
         chunk = await self._audio_queue.get()
         segment = self._vad.process_chunk(chunk, mode=VADMode.LISTEN)
         if segment is not None:
@@ -517,7 +536,7 @@ class MainLoop:
                 None if cancelled_pending is None
                 else {
                     "intent": getattr(cancelled_pending.intent, "intent", None),
-                    "intent_detail": _safe_model_dump(cancelled_pending.intent),
+                    "intent_detail": safe_model_dump(cancelled_pending.intent),
                     "raw_text": cancelled_pending.raw_text,
                 }
             ),
@@ -552,13 +571,3 @@ class MainLoop:
 
 
 __all__ = ["MainLoop", "MainLoopError"]
-
-
-def _safe_model_dump(intent: ParsedIntent) -> dict:
-    """安全地把 intent 转 dict（pydantic 模型用 model_dump，其他返回空）。"""
-    if hasattr(intent, "model_dump"):
-        try:
-            return intent.model_dump()
-        except Exception:  # noqa: BLE001
-            return {}
-    return {}

@@ -246,6 +246,8 @@ select option { background: #fff; color: var(--ink); }
   background: #FFF3EC; color: var(--brand-deep); white-space: nowrap;
 }
 .keyhint { font-size: 12px; color: var(--ink-dim); white-space: nowrap; }
+.switch-lite { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-mid); cursor: pointer; }
+.switch-lite input { flex: none; width: auto; }
 
 /* 语音运行控制 */
 .run-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
@@ -410,6 +412,34 @@ td.path { font-family: var(--mono); font-size: 12px; color: var(--ink-dim); word
         <div class="form-note">
           启动会拉起独立的语音子进程（无黑窗）；说「退出程序」或点「停止语音」都能结束它。
           识别活动见「审计日志」页。
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>快捷触发</h2>
+          <span class="hint">点击光圈 / 全局热键</span>
+        </div>
+        <div class="set-grid">
+          <label for="set-hotkey">全局热键</label>
+          <div class="field">
+            <input type="text" id="set-hotkey" placeholder="如 ctrl+alt+v" spellcheck="false">
+            <span class="ovr" id="ovr-hotkey" hidden>已覆盖</span>
+          </div>
+
+          <label for="set-hotkey-enabled">启用热键</label>
+          <div class="field">
+            <label class="switch-lite">
+              <input type="checkbox" id="set-hotkey-enabled">
+              <span>注册全局热键（按一下 toggle 语音启停）</span>
+            </label>
+          </div>
+        </div>
+        <button type="button" class="btn" id="hotkey-save">保存热键</button>
+        <div class="form-note">
+          屏幕右下角的状态光圈也可<b>直接点击</b> toggle 语音启停（与热键等价，均非破坏性）。
+          热键格式：修饰键（ctrl/alt/shift/win）+ 主键，如 <code>ctrl+alt+v</code>。
+          改热键后<b>重启本控制台</b>才重新注册。
         </div>
       </section>
     </div>
@@ -720,6 +750,10 @@ async function loadSettings() {
     });
     $('ovr-asr').hidden = !(s.asr_overridden || []).includes('model_size');
     $('ovr-tts').hidden = !(s.tts_overridden || []).includes('voice');
+    // 全局热键（修订 33）
+    $('set-hotkey').value = s.hotkey || 'ctrl+alt+v';
+    $('set-hotkey-enabled').checked = s.hotkey_enabled !== false;
+    $('ovr-hotkey').hidden = !s.hotkey_overridden;
     updateVoiceLed(s.voice_running);
   } catch (e) { toast('读取配置失败', true); }
 }
@@ -734,6 +768,18 @@ async function saveSettings() {
   const r = await api.save_settings(provider, model, baseUrl, apiKey, asrModel, ttsVoice);
   if (r.ok) { toast('已保存，语音助手重启后生效'); loadSettings(); }
   else toast(r.error || '保存失败', true);
+}
+/* 单独保存热键（修订 33）：前 6 个位置参数传空 = 后端保留现有 LLM/ASR/TTS 覆盖，
+   只写 hotkey + hotkey_enabled。热键改动需重启控制台重新注册。 */
+async function saveHotkey() {
+  const api = API(); if (!api) return;
+  const hotkey = $('set-hotkey').value.trim();
+  const enabled = $('set-hotkey-enabled').checked;
+  const r = await api.save_settings('', '', '', '', '', '', hotkey, enabled);
+  if (r.ok) {
+    toast(r.hotkey_restart_required ? '已保存，重启本控制台后热键生效' : '已保存', false, 6000);
+    loadSettings();
+  } else toast(r.error || '保存失败', true);
 }
 
 /* ── 语音启停 ── */
@@ -792,6 +838,7 @@ $('open-btn').onclick = openApp;
 $('res-q').addEventListener('keydown', e => { if (e.key === 'Enter') resolve(); });
 $('log-btn').onclick = refreshLog;
 $('set-save').onclick = saveSettings;
+$('hotkey-save').onclick = saveHotkey;
 $('voice-start').onclick = voiceStart;
 $('voice-stop').onclick = voiceStop;
 

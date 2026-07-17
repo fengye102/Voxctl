@@ -38,6 +38,7 @@ pyinstaller --noconfirm --name voxctl ^
     --hidden-import nlu.providers.anthropic_provider ^
     --hidden-import nlu.providers.openai_provider ^
     --hidden-import _cffi_backend ^
+    --hidden-import ui.state_emitter ^
     --add-data "%~dp0audio\silero_vad.onnx;." ^
     --distpath dist --workpath build --specpath build ^
     "%~dp0main.py"

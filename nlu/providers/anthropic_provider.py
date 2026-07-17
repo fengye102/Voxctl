@@ -6,7 +6,6 @@ CLAUDE.md 第 5 节：LLM 在意图解析这一步只输出结构化数据，不
 
 from __future__ import annotations
 
-import re
 from typing import Any, Optional
 
 from nlu.llm_client import (
@@ -100,27 +99,6 @@ class AnthropicClient(LLMClient):
                 }
             )
         return tools
-
-    @staticmethod
-    def _resolve_name(returned: str, allowed: set[str]) -> str | None:
-        """把中转站改写过的工具名映射回原始名。
-
-        部分中转站会把工具名重写成 CompatXxxYyy{6hex} 格式（如 CompatOpenApp566c2f），
-        这里做逆映射：strip 前缀 + strip 6位hex后缀 + PascalCase→snake_case 还原。
-        如果返回的名字本来就合法，直接返回。
-        """
-        if returned in allowed:
-            return returned
-        # 构建 PascalCase → 原名 的查找表
-        def to_pascal(s: str) -> str:
-            return "".join(w.capitalize() for w in s.split("_"))
-        pascal_map = {to_pascal(n): n for n in allowed}
-        candidate = returned
-        if candidate.startswith("Compat"):
-            candidate = candidate[6:]
-        # 去掉末尾 6 个小写十六进制字符
-        candidate = re.sub(r"[0-9a-f]{6}$", "", candidate)
-        return pascal_map.get(candidate)  # None if still unrecognized
 
     @staticmethod
     def _extract_tool_call(response: Any, allowed_names: set[str]) -> dict:

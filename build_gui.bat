@@ -54,6 +54,7 @@ pyinstaller --noconfirm --name voxctl ^
     --hidden-import main ^
     --add-data "%~dp0audio\silero_vad.onnx;." ^
     --add-data "%~dp0webui\static\index.html;webui_static" ^
+    --add-data "%~dp0ui\static\overlay.html;ui_static" ^
     --distpath dist --workpath build --specpath build ^
     "%~dp0app.py"
 

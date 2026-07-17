@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Voxctl overlay 视觉预览（验收用）</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  min-height: 100vh;
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 28px;
+  font-family: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
+  color: #e0e0e0;
+  padding: 40px 20px;
+}
+h1 { font-size: 18px; font-weight: 500; color: #fff; }
+
+.info { text-align: center; min-height: 56px; }
+.info .state-name { font-size: 22px; font-weight: 600; color: #6fb3d6; margin-bottom: 6px; }
+.info .state-desc { font-size: 13px; color: #8899aa; }
+
+/* 模拟 overlay 的 80×80 圆形黑底窗口 */
+.stage-wrap {
+  width: 100px; height: 100px;
+  background: #000;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 8px 32px rgba(0,0,0,.5);
+}
+.stage-wrap iframe {
+  width: 80px; height: 80px;
+  border: none;
+  border-radius: 50%;
+}
+
+.controls {
+  display: flex; flex-wrap: wrap; gap: 10px;
+  justify-content: center; max-width: 680px;
+}
+.controls button {
+  padding: 10px 16px;
+  border: 1px solid #3a3a5e;
+  background: #252540;
+  color: #c0c0d0;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: all .15s;
+}
+.controls button:hover { background: #353560; border-color: #5a5a8e; }
+.controls button.active { background: #4a4a8e; border-color: #7a7ace; color: #fff; }
+
+.hint {
+  font-size: 12px; color: #667; max-width: 520px;
+  text-align: center; line-height: 1.7;
+}
+.hint code {
+  background: #252540; padding: 1px 6px; border-radius: 3px;
+  color: #8cb4d6; font-family: 'Cascadia Mono', Consolas, monospace;
+}
+</style>
+</head>
+<body>
+  <h1>Voxctl overlay 各阶段视觉预览</h1>
+
+  <div class="info">
+    <div class="state-name" id="stateName">idle</div>
+    <div class="state-desc" id="stateDesc">点击下方按钮切换状态</div>
+  </div>
+
+  <div class="stage-wrap">
+    <iframe id="overlayFrame" src="overlay.html" title="overlay"></iframe>
+  </div>
+
+  <div class="controls">
+    <button data-state="idle">idle 待机</button>
+    <button data-state="listen">listen 说话中</button>
+    <button data-state="asr">asr 转写中</button>
+    <button data-state="execute">execute 执行中</button>
+    <button data-state="tts">tts 播报中</button>
+    <button data-state="await_confirm">await_confirm 确认</button>
+    <button data-event="error">error 错误</button>
+  </div>
+
+  <p class="hint">
+    iframe 内嵌真实的 <code>overlay.html</code>，点按钮经 <code>window.applyEvent</code> 切状态。<br>
+    验收点：idle（静止灰点 = 运行结束后待机）vs 各运行时状态（动画 = 运行中），视觉区分度是否明确。
+  </p>
+
+  <script>
+    var STATE_DESC = {
+      'idle': '待机 / 运行结束后（静止灰点）',
+      'listen': '说话中 / 录音时（红点脉冲呼吸）',
+      'asr': '转写中 / 录音结束后处理（6 彩点圆环旋转+呼吸）',
+      'execute': '执行指令中（紫点+白缺口环旋转）',
+      'tts': '播报中（绿点波形扩散）',
+      'await_confirm': '等待确认（黄点闪烁）',
+      'error': '错误（红点快闪）'
+    };
+
+    var frame = document.getElementById('overlayFrame');
+    var stateName = document.getElementById('stateName');
+    var stateDesc = document.getElementById('stateDesc');
+    var buttons = document.querySelectorAll('.controls button');
+
+    function setActive(btn) {
+      buttons.forEach(function (b) { b.classList.remove('active'); });
+      if (btn) btn.classList.add('active');
+    }
+
+    function applyState(state) {
+      var win = frame.contentWindow;
+      if (win && win.applyEvent) {
+        win.applyEvent({ event: 'state', state: state });
+      }
+      stateName.textContent = state;
+      stateDesc.textContent = STATE_DESC[state] || '';
+    }
+
+    function applyError() {
+      var win = frame.contentWindow;
+      if (win && win.applyEvent) win.applyEvent({ event: 'error' });
+      stateName.textContent = 'error';
+      stateDesc.textContent = STATE_DESC['error'];
+    }
+
+    buttons.forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var state = btn.getAttribute('data-state');
+        var event = btn.getAttribute('data-event');
+        if (state) {
+          applyState(state);
+        } else if (event === 'error') {
+          applyError();
+        }
+        setActive(btn);
+      });
+    });
+
+    // iframe 加载完成后默认切 idle 高亮
+    frame.addEventListener('load', function () {
+      applyState('idle');
+      setActive(document.querySelector('[data-state="idle"]'));
+    });
+  </script>
+</body>
+</html>

@@ -35,9 +35,6 @@ from typing import Optional
 _LOG = logging.getLogger(__name__)
 
 
-class AppIndexError(Exception):
-    """应用索引模块错误基类。"""
-
 
 # 排除的快捷方式名关键词（小写比较）：卸载器绝不能被"打开 XX"误命中
 _EXCLUDE_KEYWORDS = ("uninstall", "卸载", "uninst")
@@ -222,4 +219,4 @@ class AppIndex:
         return names[:limit] if limit > 0 else names
 
 
-__all__ = ["AppIndex", "AppEntry", "AppIndexError", "MatchResult", "MatchStatus"]
+__all__ = ["AppIndex", "AppEntry", "MatchResult", "MatchStatus"]

@@ -36,9 +36,6 @@ from nlu.schema import CloseAppIntent, OpenAppIntent
 _LOG = logging.getLogger(__name__)
 
 
-class AppControlError(Exception):
-    """应用控制模块错误基类。"""
-
 
 class AppController:
     """打开/关闭应用程序。共享 Whitelist 实例（只读）。

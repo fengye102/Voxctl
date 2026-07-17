@@ -33,9 +33,6 @@ _COMMAND_TIMEOUT = 30
 _OUTPUT_LIMIT = 500
 
 
-class ShellRunnerError(Exception):
-    """Shell 命令执行模块错误基类。"""
-
 
 class ShellRunner:
     """执行白名单内的自定义命令。共享 Whitelist 实例（只读）。"""

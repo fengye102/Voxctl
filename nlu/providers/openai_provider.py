@@ -12,7 +12,6 @@ CLAUDE.md 第 2.1 节：OpenAI 兼容端点（中转站）也走这条路。
 from __future__ import annotations
 
 import json
-import re
 from typing import Any, Optional
 
 from nlu.llm_client import (
@@ -108,20 +107,6 @@ class OpenAIClient(LLMClient):
                 }
             )
         return tools
-
-    @staticmethod
-    def _resolve_name(returned: str, allowed: set[str]) -> str | None:
-        """把中转站改写过的工具名映射回原始名（与 AnthropicClient 同逻辑）。"""
-        if returned in allowed:
-            return returned
-        def to_pascal(s: str) -> str:
-            return "".join(w.capitalize() for w in s.split("_"))
-        pascal_map = {to_pascal(n): n for n in allowed}
-        candidate = returned
-        if candidate.startswith("Compat"):
-            candidate = candidate[6:]
-        candidate = re.sub(r"[0-9a-f]{6}$", "", candidate)
-        return pascal_map.get(candidate)
 
     @staticmethod
     def _extract_tool_call(response: Any, allowed_names: set[str]) -> dict:
