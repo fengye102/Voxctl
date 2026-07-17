@@ -1,5 +1,5 @@
 @echo off
-rem Build Voxctl voice-assistant exe (CLAUDE.md rev 18; onnx rev 21; TTS/keyring rev 34)
+rem Build Voxctl voice-assistant exe (CLAUDE.md rev 18; onnx rev 21; TTS/keyring rev 34; plugins rev 42)
 rem Output: dist\voxctl\voxctl.exe (onedir, ~271MB)
 rem
 rem  - Copy the WHOLE dist\voxctl folder to the target machine.
@@ -55,6 +55,8 @@ pyinstaller --noconfirm --name voxctl ^
     --hidden-import nlu.providers.openai_provider ^
     --hidden-import _cffi_backend ^
     --hidden-import pyttsx3 ^
+    --hidden-import plugins ^
+    --hidden-import plugins.base ^
     --hidden-import ui.state_emitter ^
     --add-data "%~dp0audio\silero_vad.onnx;." ^
     --add-data "%~dp0core\_build_hash;core" ^

@@ -1,5 +1,5 @@
 @echo off
-rem Build Voxctl GUI-console exe (CLAUDE.md rev 19; onnx rev 21; TTS/keyring rev 34)
+rem Build Voxctl GUI-console exe (CLAUDE.md rev 19; onnx rev 21; TTS/keyring rev 34; plugins rev 42)
 rem Output: dist\voxctl\voxctl.exe (onedir, ~271MB)
 rem
 rem  - Default launch opens the PyWebView native GUI console. The --voice
@@ -69,6 +69,8 @@ pyinstaller --noconfirm --name voxctl ^
     --hidden-import nlu.providers.openai_provider ^
     --hidden-import _cffi_backend ^
     --hidden-import pyttsx3 ^
+    --hidden-import plugins ^
+    --hidden-import plugins.base ^
     --hidden-import main ^
     --add-data "%~dp0audio\silero_vad.onnx;." ^
     --add-data "%~dp0core\_build_hash;core" ^
