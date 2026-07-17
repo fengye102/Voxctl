@@ -214,6 +214,10 @@ Voxctl/
 │   ├── shell_runner.py        # 执行自定义命令
 │   └── whitelist.py           # 白名单校验 + 二次确认逻辑
 │
+├── plugins/                    # 插件机制（修订 42）：扩展意图类型，不扩展权限
+│   ├── __init__.py             # PluginRegistry：扫描/加载/校验插件，提供 dispatch + tool specs 合并
+│   └── base.py                 # PluginSpec 数据类 + PluginError 异常 + 插件开发约束说明
+│
 ├── tts/
 │   ├── __init__.py
 │   └── edge_tts_engine.py     # Edge TTS 封装 + 流式播放管线 + pyttsx3 本地后备（修订 34）
@@ -272,6 +276,7 @@ Voxctl/
 │   │   ├── test_local_settings.py  # local_settings 读写/覆盖/keyring（37 例）
 │   │   ├── test_event_loop.py      # 真实 MainLoop 单元测试（41 例，含投机 ASR）
 │   │   ├── test_vad_adaptive.py    # VAD 自适应阈值单元测试（15 例）
+│   │   ├── test_plugins.py         # 插件机制单元测试（24 例，修订 42）
 │   │   └── test_mainloop_integration.py  # MainLoop 集成冒烟测试（5 例，驱动真实 _main_loop while 循环，修订 39）
 │   ├── acceptance/             # 验收脚本：需真实设备/网络/LLM，手动运行
 │   │   ├── __init__.py
@@ -297,7 +302,7 @@ Voxctl/
 - 配置一律进 `config.yaml`，禁止在代码里硬编码路径、模型名、白名单。
 - 每个模块自己的异常，用自定义 Exception 类，不要裸用 `Exception`。
 - 日志文件、模型缓存文件不进 git，写入 `.gitignore`。
-- 新增执行能力（比如以后加"发邮件"）在 `executor/` 下新建文件，注册进白名单，不要塞进已有文件。
+- 新增执行能力（比如以后加"发邮件"）优先通过插件机制（`plugins/` 下新建 `.py` 文件，暴露 `PLUGIN_SPEC`），无需改动核心代码；仅当能力需要深度集成（新的 executor 子模块 + 白名单类型）时才在 `executor/` 下新建文件并注册进白名单。
 - **生产界面（`webui/static/`）必须离线自足**（frozen exe 无网也要能渲染，不引任何 CDN 资源）。
 
 ### config.yaml 骨架
@@ -318,6 +323,7 @@ vad:
 asr:
   model_size: small              # 默认 small（base 实测 CER 不达标，已升级，见第 9 节）；仍不达标再评估 medium
   device: cpu                    # cpu / cuda，MVP 固定 cpu
+  language: zh                   # ASR 识别语言（传给 faster-whisper），zh/en/ja 等；只改此项不影响 TTS/LLM 链路
 
 llm:
   provider: anthropic             # anthropic / openai，决定用哪个 provider 实现，见第 2.1 节
@@ -333,6 +339,9 @@ ui:
   status_overlay: true            # 状态浮窗（光圈）总开关，见第 8.11 节
   hotkey: "ctrl+alt+v"            # 全局热键 toggle 语音启停（修订 33）；GUI 可改，覆盖写 voxctl.local.yaml
   hotkey_enabled: true            # 是否注册全局热键；false = 只保留点击光圈 toggle
+
+plugins:
+  enabled: true                   # 插件机制总开关（修订 42）；false = 不扫描 plugins/，LLM schema 不含插件意图
 
 whitelist:
   apps:
@@ -456,6 +465,12 @@ whitelist:
 - **GUI 控制台边界（修订 19）**：`webui/gui.py` 的 PyWebView 原生控制台**只暴露非破坏性操作**——改 LLM 配置（base_url / model / api_key，写 `voxctl.local.yaml`）、启停语音子进程、别名注册、解析测试、打开应用；**绝不**暴露关闭应用 / 删文件 / 跑命令（这三类仍只走语音 + 二次确认，边界同上条）。启停语音只是拉起 / 杀掉语音子进程，不是系统破坏性操作，不需二次确认。api_key 存 `voxctl.local.yaml` 明文（用户明确选择，§2 已记录放宽），语音仍经环境变量读取（`core/local_settings.py` 启动时注入），key **不进 `config.yaml`**；该本地文件随 exe 文件夹走，勿分享 / 传 git。
 - **启停必须给出失败反馈（修订 20）**：`Popen` 成功 ≠ 语音初始化成功——子进程可能在加载 vad/whisper 后因缺 key / 换错 base_url / 设备异常而崩溃退出，GUI **不得静默**把开关拨回"已停止"，须回读 `logs/voxctl.log` 尾部异常行把原因告知用户。落实为四道防线：启动前预检 key（本地文件或 env 都没有就直接拒绝，不白起必崩进程）、子进程 stdout/stderr 重定向到 `logs/voxctl-voice.out`（兜早期崩溃）、启动后短等探活（源码模式快速崩当场回读）、`voice_status` 轮询区分"用户主动停"与"意外崩溃"（frozen 导入慢崩在探活窗口之后的兜底）。
 - **点击光圈 / 全局热键 = 启停的等价触发（修订 33）**：点击状态浮窗、按全局键盘热键，都只是 GUI 启停语音子进程的**新触发方式**，走同一套 `toggle_voice`（内部复用修订 20 的启停逻辑与四道防线），不新增任何能力面——不暴露关闭应用 / 删文件 / 跑命令。因光圈太小放不下失败文字，点击/热键**启动失败**只做红闪 + 日志，详细原因仍需开 GUI 看（GUI 按钮路径的失败反馈不变）。热键用纯 ctypes `RegisterHotKey`，热键被占用要回报错误不静默。
+- **插件安全边界（修订 42，强制）**：插件可以注册新意图类型和 handler，但**不能扩展权限**：
+  - 插件 handler 返回的 `ExecutionResult` 走与内置意图相同的 TTS 模板播报链路
+  - 插件 handler **禁止直接调用 `subprocess`、`os.system`、`os.popen`**——这不是技术上做不到，而是规范约束；如果插件需要执行系统命令，必须通过 executor 暴露的受控接口（如调已注册的白名单命令），这些接口自身有白名单校验
+  - 插件 handler 的异常不能导致主循环崩溃——`PluginRegistry.dispatch()` 内部 catch 插件异常，转为失败的 `ExecutionResult`
+  - `plugins/` 目录下的 `.py` 文件在启动时静态加载（`import` 模块 → 读 `PLUGIN_SPEC` 变量），加载失败的插件跳过并记日志，不阻断启动
+  - 审计日志记录插件意图的执行（`action_type` = 插件意图名），与内置意图一致
 
 ### 二次确认机制（强制）
 

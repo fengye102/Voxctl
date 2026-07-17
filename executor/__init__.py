@@ -28,9 +28,12 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Union
+from typing import TYPE_CHECKING, Optional, Union
 
 import yaml
+
+if TYPE_CHECKING:
+    from plugins import PluginRegistry
 
 # nlu.schema 和 whitelist 不依赖 executor 包，可先导入
 from executor.whitelist import Whitelist
@@ -42,6 +45,7 @@ from nlu.schema import (
     OpenAppIntent,
     OpenFileIntent,
     ParsedIntent,
+    PluginIntent,
     QuerySystemIntent,
     RunCommandIntent,
     UnknownIntent,
@@ -111,14 +115,15 @@ class Executor:
         whitelist: Whitelist,
         log_path: Path,
         app_index: Optional[AppIndex] = None,
+        plugin_registry: Optional["PluginRegistry"] = None,
     ) -> None:
         self._whitelist = whitelist
         self._log_path = log_path
-        # 子模块共享同一份白名单实例（只读）；app_index 为 None 时打开只限白名单
         self._app_control = AppController(whitelist, app_index=app_index)
         self._system_query = SystemQuery()
         self._file_ops = FileOps(whitelist)
         self._shell_runner = ShellRunner(whitelist)
+        self._plugin_registry = plugin_registry
 
     @classmethod
     def from_config(
@@ -126,6 +131,7 @@ class Executor:
         whitelist_cfg: dict,
         log_path: str = "logs/actions.log",
         user_apps_path: Union[str, Path, None] = None,
+        plugin_registry: Optional["PluginRegistry"] = None,
     ) -> "Executor":
         """从 config.yaml 的 whitelist 块构造。
 
@@ -164,7 +170,8 @@ class Executor:
                 # 索引构建失败不阻断启动，退化为仅白名单（保守方向）
                 _LOG.warning("AppIndex build failed, open_app falls back to whitelist only: %s", exc)
 
-        return cls(whitelist=wl, log_path=log_path_obj, app_index=app_index)
+        return cls(whitelist=wl, log_path=log_path_obj, app_index=app_index,
+                   plugin_registry=plugin_registry)
 
     # ------------------------------------------------------------------
     def execute(
@@ -249,6 +256,17 @@ class Executor:
                 success=False,
                 action_type="unknown",
                 error=intent.reason or "无法理解意图",
+            )
+
+        if isinstance(intent, PluginIntent):
+            if self._plugin_registry and self._plugin_registry.has(intent.intent):
+                return self._plugin_registry.dispatch(
+                    intent.intent, intent.params, confirmed
+                )
+            return ExecutionResult(
+                success=False,
+                action_type=intent.intent,
+                error=f"未注册的插件意图: {intent.intent}",
             )
 
         # 理论上不会走到（schema 校验保证），防御性兜底

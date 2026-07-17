@@ -57,11 +57,28 @@ def create_from_config(config: dict) -> "MainLoop":
     )
 
     asr_engine = WhisperEngine.from_config(config.get("asr", {}))
-    intent_parser = IntentParser.from_config(config["llm"])
+
+    plugin_registry = None
+    plugin_tool_specs = None
+    plugin_intent_names = None
+    plugins_cfg = config.get("plugins", {})
+    if plugins_cfg.get("enabled", True):
+        from plugins import PluginRegistry
+        plugin_registry = PluginRegistry.load_from_directory()
+        if plugin_registry:
+            plugin_tool_specs = plugin_registry.tool_specs()
+            plugin_intent_names = plugin_registry.intent_names
+
+    intent_parser = IntentParser.from_config(
+        config["llm"],
+        plugin_tool_specs=plugin_tool_specs,
+        plugin_intent_names=plugin_intent_names,
+    )
 
     executor = Executor.from_config(
         config["whitelist"],
         log_path="logs/actions.log",
+        plugin_registry=plugin_registry,
     )
 
     player = AudioPlayer()

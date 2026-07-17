@@ -30,6 +30,7 @@ from nlu.llm_client import (
 )
 from nlu.schema import (
     ParsedIntent,
+    PluginIntent,
     UnknownIntent,
     build_intent_schema,
     validate_intent,
@@ -99,14 +100,24 @@ class IntentParser:
             ...
     """
 
-    def __init__(self, client: LLMClient) -> None:
+    def __init__(
+        self,
+        client: LLMClient,
+        plugin_tool_specs: Optional[list[dict]] = None,
+        plugin_intent_names: Optional[frozenset[str]] = None,
+    ) -> None:
         self._client = client
-        # 意图工具规格是纯计算结果，进程内缓存一次即可，避免每次 parse 都重建。
-        self._schema = build_intent_schema()
+        self._plugin_intent_names = plugin_intent_names or frozenset()
+        self._schema = build_intent_schema(plugin_tool_specs)
 
     # ------------------------------------------------------------------
     @classmethod
-    def from_config(cls, llm_config: dict) -> "IntentParser":
+    def from_config(
+        cls,
+        llm_config: dict,
+        plugin_tool_specs: Optional[list[dict]] = None,
+        plugin_intent_names: Optional[frozenset[str]] = None,
+    ) -> "IntentParser":
         """按 config 字段构造。会从环境变量读 API key，未设置则抛 RuntimeError。"""
         cfg = LLMConfig.from_dict(llm_config)
         api_key = os.environ.get(cfg.api_key_env, "").strip()
@@ -122,7 +133,7 @@ class IntentParser:
             base_url=cfg.base_url,
             timeout=cfg.timeout,
         )
-        return cls(client)
+        return cls(client, plugin_tool_specs, plugin_intent_names)
 
     # ------------------------------------------------------------------
     def parse(self, text: str) -> ParsedIntent:
@@ -157,6 +168,11 @@ class IntentParser:
             # 兜底：新增的 LLMError 子类也走 unknown，不让上层崩。
             _LOG.warning("LLM generic error: %s", exc)
             return UnknownIntent(reason=f"llm error: {exc}")
+
+        intent_name = raw.get("intent", "")
+        if intent_name in self._plugin_intent_names:
+            params = {k: v for k, v in raw.items() if k != "intent"}
+            return PluginIntent(intent=intent_name, params=params)
 
         try:
             return validate_intent(raw)

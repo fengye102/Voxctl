@@ -41,6 +41,10 @@ asr:
   model_size: small
   device: cpu   # cpu / cuda，MVP 固定 cpu
   compute_type: int8   # CPU 下 int8 最快，质量损失可忽略
+  # ASR 识别语言：传给 faster-whisper 的 language 参数
+  # zh = 中文（默认），en = 英文，ja = 日文……完整列表见 Whisper 文档
+  # 改此项即可让语音助手识别其他语言（TTS/LLM/白名单等暂不联动，见 CLAUDE.md §4）
+  language: zh
   # 繁简转换：Whisper 中文模型对大陆普通话有时输出繁体字符，用 opencc t2s 字符级转换
   # true = 启用（推荐）；false = 禁用（仅在排查 opencc 问题时关闭）
   opencc_enabled: true
@@ -77,6 +81,10 @@ ui:
   hotkey: "ctrl+alt+v"
   #   false = 不注册全局热键（只保留点击光圈 toggle）；热键被占用时启动会记日志并跳过
   hotkey_enabled: true
+
+plugins:
+  # 插件机制总开关（修订 42）：true = 扫描 plugins/ 加载自定义意图；false = 不加载
+  enabled: true
 
 whitelist:
   # 打开应用放开开关（CLAUDE.md §6 修订 15）：

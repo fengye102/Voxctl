@@ -100,6 +100,13 @@ class UnknownIntent(BaseModel):
     reason: Optional[str] = Field(None, description="判定为 unknown 的简要原因，可选")
 
 
+class PluginIntent(BaseModel):
+    """插件注册的自定义意图（修订 42）。intent 字段 = 插件的 intent_name。"""
+
+    intent: str
+    params: dict = Field(default_factory=dict)
+
+
 # --- 判别联合类型 --------------------------------------------------------------
 
 ParsedIntent = Annotated[
@@ -190,7 +197,7 @@ _INTENT_TOOL_SPECS: List[dict] = [
 ]
 
 
-def build_intent_schema() -> dict:
+def build_intent_schema(plugin_tool_specs: Optional[List[dict]] = None) -> dict:
     """生成给 LLMClient 使用的意图工具规格。
 
     返回结构：
@@ -201,6 +208,10 @@ def build_intent_schema() -> dict:
             ]
         }
     各 provider 内部将此结构转为自己协议要求的格式（Anthropic tool 或 OpenAI function）。
+
+    Args:
+        plugin_tool_specs: 插件注册的额外 tool specs（来自 PluginRegistry.tool_specs()）。
+            每项格式与内置 spec 的输出一致：{"name", "description", "parameters"}。
     """
     intents: List[dict] = []
     for spec in _INTENT_TOOL_SPECS:
@@ -214,6 +225,8 @@ def build_intent_schema() -> dict:
                 "parameters": params_schema,
             }
         )
+    if plugin_tool_specs:
+        intents.extend(plugin_tool_specs)
     return {"intents": intents}
 
 
