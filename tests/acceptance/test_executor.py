@@ -36,7 +36,6 @@ from nlu.schema import (
     OpenFileIntent,
     QuerySystemIntent,
     RunCommandIntent,
-    UnknownIntent,
 )
 
 # Windows 控制台默认非 UTF-8，中文输出容易乱码（CLAUDE.md §8.6）
@@ -103,7 +102,7 @@ def run_cases(cases: list[Case], executor: Executor) -> tuple[int, int]:
                 print(f"     期望 payload 含键: {case.expect_payload_keys}")
         else:
             if case.expect_payload_keys:
-                print(f"     payload: {{k: result.payload.get(k) for k in case.expect_payload_keys}}")
+                print("     payload: {k: result.payload.get(k) for k in case.expect_payload_keys}")
         if ok:
             passed += 1
         print()

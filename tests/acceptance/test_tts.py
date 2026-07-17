@@ -247,6 +247,40 @@ TEMPLATE_CASES: list[TemplateCase] = [
         expected="不确定你想做什么",
     ),
 
+    # --- llm_error（基础设施故障，区别于 unknown） ---
+    TemplateCase(
+        name="llm_error 超时",
+        result=ExecutionResult(
+            success=False, action_type="llm_error",
+            error="timeout: request timed out after 30s",
+        ),
+        expected="网络连接超时，请稍后再试",
+    ),
+    TemplateCase(
+        name="llm_error 限流",
+        result=ExecutionResult(
+            success=False, action_type="llm_error",
+            error="rate limited: 429 Too Many Requests",
+        ),
+        expected="请求过于频繁，请稍后再试",
+    ),
+    TemplateCase(
+        name="llm_error API 故障",
+        result=ExecutionResult(
+            success=False, action_type="llm_error",
+            error="api error: 500 Internal Server Error",
+        ),
+        expected="服务出了问题，请稍后再试",
+    ),
+    TemplateCase(
+        name="llm_error 解析失败",
+        result=ExecutionResult(
+            success=False, action_type="llm_error",
+            error="parse error: no tool call in response",
+        ),
+        expected="理解指令时出了问题，请再说一次",
+    ),
+
     # --- cancel ---
     TemplateCase(
         name="cancel",
@@ -325,7 +359,7 @@ async def run_real_playback_tests() -> tuple[int, int]:
         print(f"    文本: {text!r}")
         try:
             await engine.speak(text)
-            print(f"    PASS  播放完成")
+            print("    PASS  播放完成")
             passed += 1
         except Exception as exc:
             print(f"    FAIL  异常: {type(exc).__name__}: {exc}")

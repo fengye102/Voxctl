@@ -1,2 +1,21 @@
+[project]
+name = "voxctl"
+version = "0.1.0"
+
 [tool.pytest.ini_options]
 testpaths = ["tests/unit"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+extend-exclude = [".claude"]
+
+[tool.ruff.lint]
+select = ["E", "F"]
+ignore = [
+    "E501",   # line too long — 项目中文注释和长路径常超限，暂不强制
+    "E402",   # module import not at top — tests 里 sys.path 操作需要
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]  # re-export 是 __init__.py 的职责

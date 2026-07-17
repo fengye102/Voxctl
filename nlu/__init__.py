@@ -25,6 +25,7 @@ from nlu.schema import (
 
 __all__ = [
     "IntentParser",
+    "is_fallback_unknown",
     "IntentType",
     "ParsedIntent",
     "LLMClient",

@@ -1,26 +1,14 @@
-"""主循环：单向串行版（CLAUDE.md §5 Step 6）。
+"""主循环：状态机 + 各阶段处理（CLAUDE.md §5 Step 6/7）。
 
-把 Step 1-5 的模块串成一条完整流程：
-    麦克风采集 → VAD 切片 → ASR 转写 → 意图解析 → 执行 → TTS 播报 → 回到采集
+构造逻辑（from_config / from_config_file）已拆到 core/factory.py，
+本文件只包含 MainLoop 的运行时行为。
 
-Step 6 明确不做打断（CLAUDE.md §5）：
-    - TTS 播报期间监听通道照常采集（recorder 一直在跑），但音频块直接丢弃，
-      不进入 VAD 处理 → 不会触发新一轮 ASR
-    - 等 TTS 播报 await 返回后，恢复 VAD 处理，重新进入 LISTEN
-    Step 7 才叠加全双工打断（TTS 期间用 INTERRUPT 阈值检测打断信号）
+状态机流程：
+    LISTEN → ASR → EXECUTE → TTS → LISTEN（含 AWAIT_CONFIRM 分支）
 
-二次确认流程：
-    1. executor.execute(intent) 返回 needs_confirmation=True
-    2. 主循环播报"确定要关闭 X 吗？"，状态切到 AWAIT_CONFIRM
-    3. 下一轮语音走 ASR → 意图解析，期望得到 ConfirmIntent / CancelIntent
-    4. ConfirmIntent：用 saved intent + confirmed=True 重新调 execute → TTS 播报结果
-    5. CancelIntent：播报"已取消"，回到 LISTEN
-    6. 其他意图：视为用户改主意，丢弃 pending，按新意图正常走流程
-
-退出机制（CLAUDE.md §2 启动与退出）：
-    - 语音说"退出程序" → ExitProgramIntent → executor 返回 should_exit=True
-      → TTS 播报"再见" → 主循环 break
-    - Ctrl+C：main.py 的 try/except KeyboardInterrupt 捕获，清理资源退出
+全双工打断（Step 7）：
+    TTS 播报期间 InterruptCoordinator 并发监听音频队列，
+    检测到用户打断立即停止播放、清理状态、回到 LISTEN。
 """
 
 from __future__ import annotations
@@ -33,26 +21,21 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
-import yaml
 
-from asr.whisper_engine import WhisperEngine
-from audio.player import AudioPlayer
-from audio.recorder import AudioRecorder, AudioRecorderError
-from audio.vad import VADMode, VADProcessor
-from audio.output_mode import OutputMode, detect_output_mode
+from audio.output_mode import OutputMode
+from audio.recorder import AudioRecorderError
+from audio.vad import VADMode
+from core.audit import log_interrupt_event
 from core.interrupt_coordinator import InterruptCoordinator
-from core.state import LoopState, PendingConfirmation, State
-from executor import Executor, ExecutionResult
-from nlu.intent_parser import IntentParser
+from core.state import LoopState, State
+from executor import ExecutionResult
+from nlu.intent_parser import is_fallback_unknown
 from nlu.schema import (
     CancelIntent,
     ConfirmIntent,
-    ExitProgramIntent,
     ParsedIntent,
     UnknownIntent,
-    safe_model_dump,
 )
-from tts.edge_tts_engine import TTSEngine, format_result
 from ui import state_emitter
 
 _LOG = logging.getLogger(__name__)
@@ -63,22 +46,25 @@ class MainLoopError(Exception):
 
 
 class MainLoop:
-    """Step 6 单向串行主循环。
+    """主循环状态机（CLAUDE.md §5 Step 6/7）。
 
-    用法：
-        loop = MainLoop.from_config_file("config.yaml")
+    构造方式：
+        from core.factory import create_from_config_file
+        loop = create_from_config_file("config.yaml")
         await loop.run()
+
+    所有外部依赖通过构造函数注入，便于测试。
     """
 
     def __init__(
         self,
-        recorder: AudioRecorder,
-        vad: VADProcessor,
-        asr_engine: WhisperEngine,
-        intent_parser: IntentParser,
-        executor: Executor,
-        tts_engine: TTSEngine,
-        player: AudioPlayer,
+        recorder,
+        vad,
+        asr_engine,
+        intent_parser,
+        executor,
+        tts_engine,
+        player,
         output_mode: OutputMode,
         audit_log_path: str = "logs/actions.log",
     ) -> None:
@@ -104,70 +90,6 @@ class MainLoop:
         self._audit_log_path = Path(audit_log_path)
 
     # ------------------------------------------------------------------
-    @classmethod
-    def from_config_file(cls, config_path: str = "config.yaml") -> "MainLoop":
-        """从 config.yaml 构造完整主循环（含所有子模块初始化）。"""
-        with open(config_path, "r", encoding="utf-8") as f:
-            config = yaml.safe_load(f)
-
-        # GUI 控制台改的 LLM 覆盖（修订 19）：叠加 provider/model/base_url，
-        # 并把 api_key 注入到环境变量（intent_parser 读取路径不变，仍读 env var）。
-        # 语音无论由 GUI 拉起还是 run.bat 独立启动都走这条，自己从 voxctl.local.yaml
-        # 读 key；无本地文件时 no-op（纯用系统环境变量的老行为不变）。
-        from core.local_settings import apply_local_llm_overrides
-        apply_local_llm_overrides(config)
-
-        return cls.from_config(config)
-
-    @classmethod
-    def from_config(cls, config: dict) -> "MainLoop":
-        """从已加载的 config dict 构造。"""
-        # 输出模式检测（Step 7 会用，Step 6 先记录）
-        output_mode = detect_output_mode(
-            config.get("audio", {}).get("output_mode", "auto")
-        )
-        _LOG.info("output mode: %s", output_mode.value)
-
-        # 录音
-        audio_cfg = config.get("audio", {})
-        recorder = AudioRecorder(
-            device_index=audio_cfg.get("input_device_index"),
-        )
-
-        # VAD（耳机/外放阈值差异在 Step 7 才生效，Step 6 先传进去）
-        vad = VADProcessor.from_config(
-            config.get("vad", {}),
-            use_headphone_threshold=(output_mode == OutputMode.HEADPHONE),
-        )
-
-        # ASR（首次构造不加载模型，延迟到第一次 transcribe）
-        asr_engine = WhisperEngine.from_config(config.get("asr", {}))
-
-        # 意图解析
-        intent_parser = IntentParser.from_config(config["llm"])
-
-        # 执行器
-        executor = Executor.from_config(
-            config["whitelist"],
-            log_path="logs/actions.log",
-        )
-
-        # TTS + 播放器
-        player = AudioPlayer()
-        tts_engine = TTSEngine.from_config(config.get("tts", {}), player)
-
-        return cls(
-            recorder=recorder,
-            vad=vad,
-            asr_engine=asr_engine,
-            intent_parser=intent_parser,
-            executor=executor,
-            tts_engine=tts_engine,
-            player=player,
-            output_mode=output_mode,
-        )
-
-    # ------------------------------------------------------------------
     async def run(self) -> None:
         """启动主循环。阻塞调用，直到 ExitProgramIntent 或 Ctrl+C。"""
         self._loop = asyncio.get_event_loop()
@@ -181,6 +103,8 @@ class MainLoop:
             self._print_user_error(f"无法启动录音：{exc}")
             self._recorder.print_devices()
             return
+
+        asyncio.create_task(asyncio.to_thread(self._asr.warmup))
 
         _LOG.info("=== Voxctl 主循环启动（Step 6 单向串行版）===")
         print("=== Voxctl 已启动，对着麦克风说话即可（说\"退出程序\"结束）===")
@@ -214,7 +138,7 @@ class MainLoop:
             except asyncio.CancelledError:
                 _LOG.info("main loop cancelled")
                 break
-            except Exception as exc:
+            except Exception:
                 _LOG.exception("main loop iteration failed (state=%s)", self._state.state.value)
                 # 出错时播报一句简短提示，然后回到 LISTEN，不让循环崩
                 state_emitter.emit_error("出错了")
@@ -229,14 +153,48 @@ class MainLoop:
     # ==================================================================
 
     async def _phase_listen(self) -> None:
-        """LISTEN：从队列取音频块 → VAD 处理 → emit 语音片段 → 切到 ASR。"""
+        """LISTEN：从队列取音频块 → VAD 处理 → emit 语音片段 → 切到 ASR。
+
+        投机 ASR（P2 #11）：VAD 进入 CONFIRMING_SILENCE 时已收集完全部
+        有意义语音，剩余 ~480ms 纯等静默确认。此期间抢先启动 ASR 转录，
+        最终 segment 到达时直接用结果，省掉等待时间。
+        """
         state_emitter.emit_state(State.LISTEN)
         chunk = await self._audio_queue.get()
         segment = self._vad.process_chunk(chunk, mode=VADMode.LISTEN)
+
         if segment is not None:
-            # 保存语音片段供 ASR 阶段使用
-            self._pending_audio = segment
+            # 最终 segment 确认——尝试用投机 ASR 结果
+            if self._speculative_asr_task is not None:
+                task = self._speculative_asr_task
+                self._speculative_asr_task = None
+                try:
+                    self._speculative_asr_result = await task
+                    _LOG.info("speculative ASR hit — saved ~%dms",
+                              self._vad._cfg.silence_confirm_frames * 32)
+                except (asyncio.CancelledError, Exception):
+                    _LOG.debug("speculative ASR unusable, falling back to final segment")
+                    self._pending_audio = segment
+            else:
+                self._pending_audio = segment
             self._state.transition(State.ASR)
+            return
+
+        # 未出最终 segment——管理投机 ASR 生命周期
+        if self._speculative_asr_task is not None:
+            if not self._vad.is_confirming_silence:
+                _LOG.debug("speech resumed / too short, cancelling speculative ASR")
+                self._speculative_asr_task.cancel()
+                self._speculative_asr_task = None
+        elif self._vad.is_confirming_silence:
+            prelim = self._vad.preliminary_segment
+            if prelim is not None:
+                _LOG.debug("starting speculative ASR (%.2fs preliminary)",
+                           len(prelim) / 16000)
+                self._speculative_asr_task = asyncio.create_task(
+                    asyncio.to_thread(self._asr.transcribe, prelim),
+                    name="speculative_asr",
+                )
 
     # 用实例属性暂存阶段间数据（只在单线程 asyncio 里访问，不需要锁）
     _pending_audio: Optional[np.ndarray] = None
@@ -244,26 +202,36 @@ class MainLoop:
     _pending_intent: Optional[ParsedIntent] = None
     _pending_result: Optional[ExecutionResult] = None
 
+    # 投机 ASR（P2 #11）：VAD 静默确认期间抢先启动 ASR 以重叠延迟
+    _speculative_asr_task: Optional[asyncio.Task] = None
+    _speculative_asr_result = None  # ASRResult or None
+
     async def _phase_asr(self) -> None:
         """ASR：把语音片段转写为文本，然后做意图解析，切到 EXECUTE。"""
         state_emitter.emit_state(State.ASR)
-        if self._pending_audio is None:
+
+        # 优先使用投机 ASR 结果（P2 #11 投机 ASR）
+        if self._speculative_asr_result is not None:
+            result = self._speculative_asr_result
+            self._speculative_asr_result = None
+            self._pending_audio = None
+        elif self._pending_audio is not None:
+            audio = self._pending_audio
+            self._pending_audio = None
+
+            # ASR 是 CPU 密集同步调用，丢到线程池避免阻塞 asyncio
+            try:
+                result = await asyncio.to_thread(self._asr.transcribe, audio)
+            except Exception as exc:  # noqa: BLE001
+                _LOG.exception("ASR transcribe failed: %s", exc)
+                self._pending_result = ExecutionResult(
+                    success=False, action_type="asr_error",
+                    error=f"语音识别失败: {type(exc).__name__}",
+                )
+                self._state.transition(State.TTS)
+                return
+        else:
             self._state.transition(State.LISTEN)
-            return
-
-        audio = self._pending_audio
-        self._pending_audio = None
-
-        # ASR 是 CPU 密集同步调用，丢到线程池避免阻塞 asyncio
-        try:
-            result = await asyncio.to_thread(self._asr.transcribe, audio)
-        except Exception as exc:  # noqa: BLE001
-            _LOG.exception("ASR transcribe failed: %s", exc)
-            self._pending_result = ExecutionResult(
-                success=False, action_type="asr_error",
-                error=f"语音识别失败: {type(exc).__name__}",
-            )
-            self._state.transition(State.TTS)
             return
 
         if result.is_empty or not result.text.strip():
@@ -315,13 +283,20 @@ class MainLoop:
             self._state.transition(State.LISTEN)
             return
 
-        # UnknownIntent 不执行，直接播报"没听懂"
+        # UnknownIntent 不执行，直接播报
         if isinstance(intent, UnknownIntent):
-            _LOG.info("UnknownIntent: %s", intent.reason)
-            self._pending_result = ExecutionResult(
-                success=False, action_type="unknown",
-                error=intent.reason or "无法理解意图",
-            )
+            if is_fallback_unknown(intent):
+                _LOG.warning("LLM 调用失败降级为 unknown: %s", intent.reason)
+                self._pending_result = ExecutionResult(
+                    success=False, action_type="llm_error",
+                    error=intent.reason or "llm error",
+                )
+            else:
+                _LOG.info("UnknownIntent: %s", intent.reason)
+                self._pending_result = ExecutionResult(
+                    success=False, action_type="unknown",
+                    error=intent.reason or "无法理解意图",
+                )
             self._state.transition(State.TTS)
             return
 
@@ -389,6 +364,9 @@ class MainLoop:
 
         try:
             await self._tts_engine.speak_result(result)
+        except Exception as exc:  # noqa: BLE001 TTS 网络/解码失败不能崩主循环
+            _LOG.warning("TTS 播报失败: %s", exc)
+            state_emitter.emit_error("语音播报失败")
         finally:
             if not monitor_task.done():
                 monitor_task.cancel()
@@ -397,40 +375,7 @@ class MainLoop:
 
         # 处理打断
         if self._interrupt_coord.interrupted:
-            _LOG.info("TTS 被打断，清理状态回到 LISTEN")
-            print("[打断] 停止播报，准备听新指令")
-
-            # 清空队列里带 TTS 泄漏的音频块，避免回到 LISTEN 后误判
-            drained = InterruptCoordinator.drain_queue(self._audio_queue)
-            self._vad.reset()
-
-            # AWAIT_CONFIRM 之前的播报被打断：视为取消待确认操作
-            cancelled_pending = None
-            if self._state.pending is not None:
-                _LOG.info("打断取消待确认操作: %s", self._state.pending.intent)
-                cancelled_pending = self._state.clear_pending_confirmation()
-
-            # 退出确认音（"再见"）被打断：视为用户反悔，取消退出（§6 打断边界）。
-            # 修订 14 后 exit_requested 延迟到播完才置位，此刻标志位尚未置上，
-            # 只需按 result.should_exit 判定"取消了退出"用于审计，无需清除动作
-            # （防御性地清一下，兼容未来其他路径提前置位的情况）。
-            cancelled_exit = False
-            if result.should_exit or self._state.exit_requested:
-                _LOG.info("打断取消退出：退出播报被打断，exit_requested 不置位，回到监听")
-                self._state.exit_requested = False
-                cancelled_exit = True
-
-            # §6 强制：审计日志必须记录打断事件本身
-            self._log_interrupt_event(
-                before_state=self._state.state.value,
-                drained_chunks=drained,
-                cancelled_pending=cancelled_pending,
-                cancelled_exit=cancelled_exit,
-                result_being_played=result,
-            )
-
-            self._state.rounds_completed += 1
-            self._state.transition(State.LISTEN)
+            self._handle_tts_interrupt(result)
             return
 
         # 正常播完，决定下一步
@@ -463,6 +408,52 @@ class MainLoop:
         if segment is not None:
             self._pending_audio = segment
             self._state.transition(State.ASR)
+
+    # ==================================================================
+    # 打断处理
+    # ==================================================================
+
+    def _handle_tts_interrupt(self, result: ExecutionResult) -> None:
+        """TTS 播报期间检测到打断后的清理逻辑。
+
+        - 清空队列中带 TTS 泄漏的音频块
+        - 如果有待确认操作，视为取消
+        - 如果是退出播报被打断，视为用户反悔（§6 打断边界）
+        - 写审计日志（§6 强制）
+        - 状态回到 LISTEN
+        """
+        _LOG.info("TTS 被打断，清理状态回到 LISTEN")
+        print("[打断] 停止播报，准备听新指令")
+
+        drained = InterruptCoordinator.drain_queue(self._audio_queue)
+        self._vad.reset()
+
+        cancelled_pending = None
+        if self._state.pending is not None:
+            _LOG.info("打断取消待确认操作: %s", self._state.pending.intent)
+            cancelled_pending = self._state.clear_pending_confirmation()
+
+        # 退出确认音（"再见"）被打断：视为用户反悔，取消退出（§6 打断边界）。
+        # 修订 14 后 exit_requested 延迟到播完才置位，此刻标志位尚未置上，
+        # 只需按 result.should_exit 判定"取消了退出"用于审计，无需清除动作
+        # （防御性地清一下，兼容未来其他路径提前置位的情况）。
+        cancelled_exit = False
+        if result.should_exit or self._state.exit_requested:
+            _LOG.info("打断取消退出：退出播报被打断，exit_requested 不置位，回到监听")
+            self._state.exit_requested = False
+            cancelled_exit = True
+
+        log_interrupt_event(
+            log_path=self._audit_log_path,
+            before_state=self._state.state.value,
+            drained_chunks=drained,
+            cancelled_pending=cancelled_pending,
+            cancelled_exit=cancelled_exit,
+            result_being_played=result,
+        )
+
+        self._state.rounds_completed += 1
+        self._state.transition(State.LISTEN)
 
     # ==================================================================
     # 二次确认处理
@@ -507,61 +498,12 @@ class MainLoop:
         self._state.transition(State.EXECUTE)
 
     # ==================================================================
-    # 审计日志（§6 强制：打断事件也要记录）
-    # ==================================================================
-
-    def _log_interrupt_event(
-        self,
-        before_state: str,
-        drained_chunks: int,
-        cancelled_pending: Optional[PendingConfirmation],
-        cancelled_exit: bool,
-        result_being_played: ExecutionResult,
-    ) -> None:
-        """记录打断事件到审计日志（CLAUDE.md §6 强制）。
-
-        打断事件可能不对应任何 execute 调用（如普通播报被打断），
-        但 §6 明确要求："审计日志必须记录打断事件本身：什么时候发生了打断、
-        打断前处于什么状态、打断取消了什么（如果有，含'取消了退出'）"。
-        """
-        import json
-        from datetime import datetime
-
-        entry = {
-            "timestamp": datetime.now().isoformat(timespec="seconds"),
-            "event": "interrupt",
-            "before_state": before_state,
-            "drained_chunks": drained_chunks,
-            "cancelled_pending": (
-                None if cancelled_pending is None
-                else {
-                    "intent": getattr(cancelled_pending.intent, "intent", None),
-                    "intent_detail": safe_model_dump(cancelled_pending.intent),
-                    "raw_text": cancelled_pending.raw_text,
-                }
-            ),
-            "cancelled_exit": cancelled_exit,
-            "result_being_played": {
-                "action_type": result_being_played.action_type,
-                "success": result_being_played.success,
-                "needs_confirmation": result_being_played.needs_confirmation,
-                "should_exit": result_being_played.should_exit,
-            },
-        }
-        try:
-            # 确保目录存在
-            self._audit_log_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self._audit_log_path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-        except OSError as exc:
-            _LOG.warning("failed to write interrupt audit log: %s", exc)
-
-    # ==================================================================
     # 工具
     # ==================================================================
 
     @staticmethod
     def _print_user_error(msg: str) -> None:
+        state_emitter.emit_error(msg)
         if hasattr(sys.stdout, "reconfigure"):
             try:
                 sys.stdout.reconfigure(encoding="utf-8")

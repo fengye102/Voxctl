@@ -18,7 +18,7 @@ import os
 import sys
 from pathlib import Path
 
-from core import MainLoop
+from core.factory import create_from_config_file
 from core.logger import configure_root_logging
 
 
@@ -54,8 +54,11 @@ def main() -> int:
     setup_logging()
     _LOG = logging.getLogger("main")
 
+    from core.version import get_version_info
+    _LOG.info("Voxctl %s", get_version_info())
+
     try:
-        loop = MainLoop.from_config_file(args.config)
+        loop = create_from_config_file(args.config)
     except FileNotFoundError as exc:
         print(f"[错误] 配置文件不存在：{exc}", file=sys.stderr)
         return 1

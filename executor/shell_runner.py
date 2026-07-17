@@ -18,10 +18,9 @@ from __future__ import annotations
 
 import logging
 import subprocess
-from typing import Optional
 
 from executor import ExecutionResult
-from executor.whitelist import CommandEntry, Whitelist
+from executor.whitelist import Whitelist
 from nlu.schema import RunCommandIntent
 
 _LOG = logging.getLogger(__name__)

@@ -87,7 +87,7 @@ def run_offline(wav_dir: Path, model_size: str) -> None:
         print(f"[ERROR] {wav_dir} 里没有 wav 文件")
         return
 
-    print(f"\n=== Step 2 验收：ASR 离线模式 ===")
+    print("\n=== Step 2 验收：ASR 离线模式 ===")
     print(f"模型：{model_size}  文件数：{len(wav_files)}\n")
 
     engine = WhisperEngine(model_size=model_size)
@@ -118,11 +118,11 @@ def run_offline(wav_dir: Path, model_size: str) -> None:
 async def run_live(device_index: Optional[int], model_size: str) -> None:
     import sys
     sys.path.insert(0, str(Path(__file__).parent.parent))
-    from audio.recorder import AudioRecorder, SAMPLE_RATE, CHUNK_SAMPLES
+    from audio.recorder import AudioRecorder, SAMPLE_RATE
     from audio.vad import VADProcessor, VADMode
     from asr import WhisperEngine
 
-    print(f"\n=== Step 2 验收：ASR 实时模式 ===")
+    print("\n=== Step 2 验收：ASR 实时模式 ===")
     print(f"模型：{model_size}\n")
 
     AudioRecorder.print_devices()

@@ -73,6 +73,13 @@ def _chdir_exe_dir() -> None:
 
 def main() -> int:
     argv = sys.argv[1:]
+
+    # --version：打印版本信息后退出（不需要重定向或 chdir）
+    if "--version" in argv or "-V" in argv:
+        from core.version import get_version_info
+        print(f"Voxctl {get_version_info()}")
+        return 0
+
     voice_role = "--voice" in argv
 
     _redirect_std(voice_role)

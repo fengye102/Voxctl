@@ -49,8 +49,8 @@ from core.local_settings import (
     _TTS_OVERRIDE_FIELDS,
     effective_llm_settings,
     effective_section_settings,
-    load_local_llm,
     load_local_section,
+    save_api_key,
     save_local_settings,
 )
 from core.logger import configure_root_logging
@@ -273,6 +273,11 @@ class Api:
         return self._state_obj
 
     # ---- 别名 / 解析 / 打开 / 日志（复用 webui 逻辑）--------------------
+    def get_version(self) -> dict:
+        """返回版本信息供前端显示。"""
+        from core.version import __version__, get_commit_hash
+        return {"version": __version__, "commit": get_commit_hash()}
+
     def get_state(self) -> dict:
         st = self._state
         return {
@@ -396,12 +401,11 @@ class Api:
             llm["model"] = model
         if base_url:
             llm["base_url"] = base_url
-        # api_key：非空则写入；空 = 保留现有本地 key（不清空，避免误删）
-        existing = load_local_llm().get("api_key")
+        # api_key：非空则存入 OS keyring（不再写 yaml 明文）
         if api_key:
-            llm["api_key"] = api_key
-        elif existing:
-            llm["api_key"] = existing
+            env_name = self._state._config.get("llm", {}).get("api_key_env", "ANTHROPIC_API_KEY")
+            if not save_api_key(api_key, env_name):
+                return {"ok": False, "error": "API key 保存到系统密钥管理器失败，请检查 keyring 是否可用"}
 
         # ASR / TTS 覆盖（修订 23）：非空才写；空 = 保留现有本地覆盖，不清空
         asr = dict(load_local_section("asr"))
@@ -426,7 +430,7 @@ class Api:
         _LOG.info("[gui] settings saved: provider=%s model=%s base_url=%s key=%s "
                   "asr=%s tts=%s hotkey=%s",
                   provider or "-", model or "-", base_url or "-",
-                  "set" if (api_key or existing) else "-",
+                  "set" if api_key else "-",
                   asr_model or "-", tts_voice or "-", hotkey or "-")
         # 热键改了需重启 GUI 才重新注册；回传标记让前端提示用户
         return {"ok": True, "hotkey_restart_required": bool(hotkey) or hotkey_enabled is not None}

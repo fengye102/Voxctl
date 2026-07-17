@@ -25,10 +25,8 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
 from typing import Optional, Union
 
@@ -47,7 +45,6 @@ from nlu.schema import (
     QuerySystemIntent,
     RunCommandIntent,
     UnknownIntent,
-    safe_model_dump,
 )
 
 _LOG = logging.getLogger(__name__)
@@ -198,7 +195,8 @@ class Executor:
             )
 
         # 无论成功失败都写审计日志（CLAUDE.md §6 强制）
-        self._log_action(raw_text, intent, result, confirmed)
+        from core.audit import log_action
+        log_action(self._log_path, raw_text, intent, result, confirmed)
         return result
 
     # ------------------------------------------------------------------
@@ -261,40 +259,6 @@ class Executor:
         )
 
     # ------------------------------------------------------------------
-    def _log_action(
-        self,
-        raw_text: str,
-        intent: ParsedIntent,
-        result: ExecutionResult,
-        confirmed: bool,
-    ) -> None:
-        """写审计日志（CLAUDE.md §6 强制）。JSON lines 格式，UTF-8 编码（§8.6）。
-
-        打断相关字段（interrupted / interrupt_detail）预留给 Step 7，当前留空。
-        """
-        entry = {
-            "timestamp": datetime.now().isoformat(timespec="seconds"),
-            "raw_text": raw_text,
-            "intent": getattr(intent, "intent", None),
-            "intent_detail": safe_model_dump(intent),
-            "confirmed": confirmed,
-            "action_type": result.action_type,
-            "success": result.success,
-            "needs_confirmation": result.needs_confirmation,
-            "should_exit": result.should_exit,
-            "error": result.error,
-            "payload": result.payload,
-            # Step 7 预留：
-            "interrupted": False,
-            "interrupt_detail": None,
-        }
-        try:
-            with open(self._log_path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-        except OSError as exc:
-            # 日志写入失败不能影响主流程，但必须打 warning 暴露问题
-            _LOG.warning("failed to write audit log to %s: %s", self._log_path, exc)
-
 
 __all__ = [
     "ExecutionResult",

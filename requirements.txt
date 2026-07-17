@@ -24,8 +24,12 @@ psutil>=5.9               # 系统状态查询（memory/disk/cpu）+ 进程关�
 
 # ── Step 5：TTS ──────────────────────────────────────────────────────────────
 edge-tts>=6.1            # Edge TTS 中文语音合成（CLAUDE.md §2 TTS 选型）
+pyttsx3>=2.90            # 本地 SAPI5 后备 TTS（edge-tts 网络异常时自动降级，修订 34）
 av>=14                   # PyAV：TTS MP3 解码（edge_tts_engine.py 用 av.open 解码音频帧）
 PyYAML>=6.0              # config.yaml / user_apps.yaml / voxctl.local.yaml 读写
+
+# ── 修订 34：API Key 安全存储 ─────────────────────────────────────────────────
+keyring>=25              # OS 密钥管理器（WinCred on Windows），替代 yaml 明文存 api_key
 
 # ── 修订 19：GUI 控制台 ───────────────────────────────────────────────────────
 pywebview>=5,<7          # 原生窗口控制台；Windows 经 pythonnet 驱动 WebView2（系统自带）

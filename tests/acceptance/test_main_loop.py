@@ -28,7 +28,7 @@ import argparse
 import asyncio
 import logging
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -121,10 +121,8 @@ class MockMainLoop:
     """
 
     def __init__(self, config: dict, texts: list[str]) -> None:
-        from asr.whisper_engine import WhisperEngine, ASRResult
         from audio.player import AudioPlayer
-        from audio.vad import VADProcessor
-        from audio.output_mode import OutputMode, detect_output_mode
+        from audio.output_mode import detect_output_mode
         from core.state import LoopState, State
         from executor import Executor, ExecutionResult
         from nlu.intent_parser import IntentParser
@@ -136,7 +134,7 @@ class MockMainLoop:
         self._State = State
 
         # 真实组件
-        output_mode = detect_output_mode(config.get("audio", {}).get("output_mode", "auto"))
+        detect_output_mode(config.get("audio", {}).get("output_mode", "auto"))
         self._intent_parser = IntentParser.from_config(config["llm"])
         self._executor = Executor.from_config(config["whitelist"], log_path="logs/actions.log")
         self._player = AudioPlayer()
@@ -623,7 +621,7 @@ def run_state_machine_only_tests(scenarios: list[MockScenario]) -> tuple[int, in
         ok = True
         if expected is not None:
             if loop.transitions != expected:
-                print(f"  [失败] 状态序列不匹配")
+                print("  [失败] 状态序列不匹配")
                 print(f"         期望: {expected}")
                 print(f"         实际: {loop.transitions}")
                 ok = False
@@ -655,13 +653,13 @@ async def run_live(config: dict, device_index: Optional[int] = None) -> int:
     print('  5. "退出程序"          → 应该播报"再见"并退出')
     print()
 
-    from core import MainLoop
+    from core.factory import create_from_config
 
     # 覆盖设备索引
     if device_index is not None:
         config.setdefault("audio", {})["input_device_index"] = device_index
 
-    loop = MainLoop.from_config(config)
+    loop = create_from_config(config)
     await loop.run()
     return 0
 

@@ -113,7 +113,7 @@ class TestStability30Rounds(unittest.IsolatedAsyncioTestCase):
 
         _LOG.info("RSS: first=%d KB, last=%d KB, total_growth=%d KB, avg/round=%.1f KB",
                   rss_first, rss_last, total_growth, avg_growth)
-        print(f"\n[稳定性] 30 轮完成，0 崩溃")
+        print("\n[稳定性] 30 轮完成，0 崩溃")
         print(f"  RSS 起始: {rss_first} KB")
         print(f"  RSS 结束: {rss_last} KB")
         print(f"  总增长:   {total_growth} KB")

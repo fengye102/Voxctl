@@ -21,7 +21,6 @@ import sys
 import unittest
 from pathlib import Path
 from typing import Optional
-from unittest.mock import MagicMock, patch
 
 import numpy as np
 
@@ -30,12 +29,11 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from audio.vad import VADMode, VADProcessor, VADConfig, CHUNK_SAMPLES
-from audio.player import AudioPlayer
+from audio.vad import VADProcessor, VADConfig, CHUNK_SAMPLES
 from core.interrupt_coordinator import InterruptCoordinator
 from core.state import LoopState, State
 from executor import ExecutionResult
-from nlu.schema import CloseAppIntent, OpenAppIntent
+from nlu.schema import CloseAppIntent
 
 _LOG = logging.getLogger(__name__)
 

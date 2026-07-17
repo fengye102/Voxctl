@@ -77,7 +77,7 @@ def run(provider: str, model: Optional[str], base_url: Optional[str], api_key_en
     }
     parser = IntentParser.from_config(llm_cfg)
 
-    print(f"=== Step 3 acceptance ===")
+    print("=== Step 3 acceptance ===")
     print(f"provider = {provider}")
     print(f"model    = {llm_cfg['model']}")
     print(f"base_url = {llm_cfg['base_url'] or '(default)'}")

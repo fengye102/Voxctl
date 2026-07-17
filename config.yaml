@@ -18,6 +18,11 @@ vad:
   speech_confirm_frames: 3
   # 连续多少帧 < threshold 才确认"语音结束"（约 480ms @ 32ms/frame）
   silence_confirm_frames: 15
+  # 自适应阈值：根据环境噪声自动抬高 silence_threshold（仅 LISTEN 模式）
+  # 安静环境下无影响；噪声环境自动提高阈值，减少误触发
+  adaptive_threshold: true
+  # 自适应余量：噪声基线 p95 上方的安全间距（0.05-0.15 范围调整）
+  adaptive_margin: 0.10
   # ─── 打断阈值调优指南（Step 8） ───────────────────────────────────
   # 症状 → 调整方向：
   #  - 误触发打断（播报时自己打断自己）：调高 interrupt_threshold_*
@@ -55,6 +60,8 @@ llm:
 
 tts:
   voice: zh-CN-XiaoxiaoNeural    # Edge TTS 中文音色
+  # pyttsx3 本地后备：edge-tts 网络异常时自动降级到 SAPI5 本地引擎（修订 34）
+  local_fallback: true
 
 ui:
   # 屏幕状态浮窗（光圈）总开关（CLAUDE.md §8.11 / 修订 26）

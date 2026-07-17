@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -58,6 +59,11 @@ MIN_SPEECH_CHUNKS = 4
 
 # 最长单次语音片段帧数：超出则强制截断（约30秒），防止内存无限增长
 MAX_SPEECH_CHUNKS = 30 * (SAMPLE_RATE // CHUNK_SAMPLES)  # ~937帧
+
+# 自适应阈值：噪声概率滑动窗口帧数（~3 秒静默期数据）
+_NOISE_WINDOW_FRAMES = 94
+# 自适应阈值：窗口内最少帧数（~1 秒），低于此用静态阈值
+_NOISE_MIN_FRAMES = 30
 
 
 class VADError(Exception):
@@ -89,6 +95,10 @@ class VADConfig:
     speech_confirm_frames: int = 2
     # 连续多少帧概率 < threshold 才算"语音结束"（结束时的静默窗口）
     silence_confirm_frames: int = 15   # 约 480ms @ 32ms/frame
+    # 自适应阈值：根据环境噪声自动抬高 silence_threshold，仅影响 LISTEN 模式
+    adaptive_threshold: bool = True
+    # 自适应余量：噪声基线 p95 上方的安全间距
+    adaptive_margin: float = 0.10
 
     @classmethod
     def from_dict(cls, raw: dict) -> "VADConfig":
@@ -102,6 +112,8 @@ class VADConfig:
             ),
             speech_confirm_frames=int(raw.get("speech_confirm_frames", 2)),
             silence_confirm_frames=int(raw.get("silence_confirm_frames", 15)),
+            adaptive_threshold=bool(raw.get("adaptive_threshold", True)),
+            adaptive_margin=float(raw.get("adaptive_margin", 0.10)),
         )
 
 
@@ -140,6 +152,9 @@ class VADProcessor:
 
         # 打断判定计数器（process_chunk_interrupt 用，独立于主状态机）
         self._interrupt_confirm_counter = 0
+
+        # 自适应阈值：SILENCE 期间的概率滑动窗口
+        self._noise_probs: deque[float] = deque(maxlen=_NOISE_WINDOW_FRAMES)
 
         # 音频缓冲
         self._pre_roll: list[np.ndarray] = []   # 最近 PRE_ROLL_CHUNKS 帧（静默期间维护）
@@ -247,6 +262,7 @@ class VADProcessor:
         self._state = _State.SILENCE
         self._confirm_counter = 0
         self._interrupt_confirm_counter = 0
+        self._noise_probs.clear()
         self._pre_roll.clear()
         self._speech_chunks.clear()
 
@@ -254,6 +270,42 @@ class VADProcessor:
     def is_speaking(self) -> bool:
         """当前是否处于语音收集状态（含确认阶段）。"""
         return self._state in (_State.SPEAKING, _State.CONFIRMING_SPEECH, _State.CONFIRMING_SILENCE)
+
+    @property
+    def is_confirming_silence(self) -> bool:
+        """当前是否正在等待静默确认（CONFIRMING_SILENCE）。"""
+        return self._state == _State.CONFIRMING_SILENCE
+
+    @property
+    def preliminary_segment(self) -> Optional[np.ndarray]:
+        """若正在静默确认且语音够长，返回已收集的语音片段（不重置状态）。
+
+        供主循环在静默确认期间抢先启动 ASR，省掉 ~480ms 等待。
+        返回 None 表示不处于合适状态或语音太短。
+        """
+        if self._state != _State.CONFIRMING_SILENCE:
+            return None
+        if len(self._speech_chunks) < MIN_SPEECH_CHUNKS:
+            return None
+        return np.concatenate(self._speech_chunks)
+
+    @property
+    def noise_floor(self) -> float:
+        """当前环境噪声基线（p95），用于自适应阈值和诊断。
+
+        返回 0.0 表示样本不足或自适应未启用。
+        """
+        if not self._cfg.adaptive_threshold:
+            return 0.0
+        if len(self._noise_probs) < _NOISE_MIN_FRAMES:
+            return 0.0
+        sorted_probs = sorted(self._noise_probs)
+        return sorted_probs[int(len(sorted_probs) * 0.95)]
+
+    @property
+    def effective_listen_threshold(self) -> float:
+        """当前 LISTEN 模式的生效阈值（含自适应调整）。"""
+        return self._get_threshold(VADMode.LISTEN)
 
     # ------------------------------------------------------------------
     # 内部实现
@@ -312,7 +364,17 @@ class VADProcessor:
 
     def _get_threshold(self, mode: VADMode) -> float:
         if mode == VADMode.LISTEN:
-            return self._cfg.silence_threshold
+            base = self._cfg.silence_threshold
+            if (
+                self._cfg.adaptive_threshold
+                and len(self._noise_probs) >= _NOISE_MIN_FRAMES
+            ):
+                sorted_probs = sorted(self._noise_probs)
+                p95 = sorted_probs[int(len(sorted_probs) * 0.95)]
+                adaptive = p95 + self._cfg.adaptive_margin
+                if adaptive > base:
+                    return adaptive
+            return base
         # INTERRUPT 模式按输出设备类型选阈值
         if self._use_headphone:
             return self._cfg.interrupt_threshold_headphone
@@ -334,6 +396,8 @@ class VADProcessor:
                 self._state = _State.CONFIRMING_SPEECH
                 self._confirm_counter = 1
                 _LOG.debug("VAD: SILENCE → CONFIRMING_SPEECH (prob=%.3f)", prob)
+            elif self._cfg.adaptive_threshold:
+                self._noise_probs.append(prob)
 
         elif self._state == _State.CONFIRMING_SPEECH:
             self._pre_roll.append(chunk)

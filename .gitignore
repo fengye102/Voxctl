@@ -22,6 +22,9 @@ test_audio/
 *.suo
 *.user
 
+# Claude Code
+.claude/
+
 # 环境变量
 .env
 
@@ -34,5 +37,7 @@ user_apps.yaml
 dist/
 build/
 *.spec
+# 打包时生成的 git hash 文件（core/version.py 读取）
+core/_build_hash
 # 模型缓存
 *.cache

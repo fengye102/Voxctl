@@ -31,7 +31,6 @@ import os
 import sys
 import urllib.error
 import urllib.request
-from typing import Optional
 
 
 # CLAUDE.md §8.6

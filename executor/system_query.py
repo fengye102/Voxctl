@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import logging
 import string
-from typing import Optional
 
 import psutil
 
