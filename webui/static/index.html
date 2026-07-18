@@ -12,8 +12,8 @@
 :root {
   --brand: #FF6B35;          /* 主色橙：导航选中态 */
   --brand-deep: #F04E23;
-  --accent: #2563EB;         /* 强调蓝：主按钮 / 数值高亮 */
-  --accent-deep: #1D4ED8;
+  --accent: #FF8F65;         /* 强调橙（柔和）：主按钮 / 数值高亮 */
+  --accent-deep: #F04E23;
   --ok: #059669;             /* 成功绿 */
   --ok-dot: #34D399;
   --danger: #DC2626;
@@ -34,12 +34,7 @@ body {
   font-family: var(--body);
   color: var(--ink);
   overflow-x: hidden;
-  /* 山景暮色渐变（纯 CSS 分层：薄雾 + 远山剪影 + 暮色天空） */
-  background:
-    radial-gradient(ellipse 120% 60% at 50% -10%, rgba(255,183,120,.35), transparent 60%),
-    linear-gradient(165deg, transparent 55%, rgba(30,27,75,.55) 56%, rgba(30,27,75,.7) 100%),
-    linear-gradient(195deg, transparent 62%, rgba(49,46,129,.5) 63%, rgba(49,46,129,.65) 100%),
-    linear-gradient(180deg, #2b1a4e 0%, #6d3a7e 34%, #c65f66 62%, #e8925c 82%, #f2b26b 100%);
+  background: linear-gradient(160deg, #1e2a4a 0%, #2d1b3d 50%, #3a1f35 100%);
   background-attachment: fixed;
 }
 
@@ -55,15 +50,15 @@ body {
 
 /* ───── 左侧导航栏：毛玻璃 ───── */
 .rail {
-  width: 260px; flex-shrink: 0;
+  width: 200px; flex-shrink: 0;
   display: flex; flex-direction: column; gap: 24px;
   background: rgba(255,255,255,.2);
   -webkit-backdrop-filter: blur(20px);
   backdrop-filter: blur(20px);
   border: 1px solid rgba(255,255,255,.25);
-  border-radius: 16px;
+  border-radius: 12px;
   box-shadow: 0 10px 30px rgba(0,0,0,.18);
-  padding: 22px 18px;
+  padding: 18px 14px;
   position: sticky; top: 16px;
   height: calc(100vh - 32px);
 }
@@ -83,8 +78,8 @@ body {
 .tabbar { display: flex; flex-direction: column; gap: 6px; }
 .tabbar button {
   display: flex; align-items: center; gap: 12px;
-  height: 48px; padding: 0 16px;
-  border: none; border-radius: 9999px;
+  height: 42px; padding: 0 14px;
+  border: none; border-radius: 12px;
   background: transparent; color: rgba(255,255,255,.85);
   font-family: var(--body); font-size: 14px; font-weight: 500;
   cursor: pointer; text-align: left;
@@ -128,21 +123,37 @@ body {
 /* ───── 右侧主内容区 ───── */
 .main { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 8px 4px; }
 
+/* 顶部状态横幅：切页常驻 */
+.top-bar {
+  display: flex; gap: 18px; align-items: center; flex-wrap: wrap;
+  background: rgba(255,255,255,.10);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255,255,255,.15);
+  border-radius: 12px;
+  padding: 10px 20px;
+  margin-bottom: 12px;
+  font-size: 12.5px; color: rgba(255,255,255,.85);
+}
+.top-bar .bar-item { display: flex; align-items: center; gap: 6px; }
+.top-bar .bar-val { font-family: var(--mono); font-weight: 600; color: #fff; }
+
 .page-head { padding: 4px 6px 20px; }
 .page-head h2 { font-size: 22px; font-weight: 700; color: #fff;
   text-shadow: 0 1px 4px rgba(0,0,0,.3); }
 .page-head p { font-size: 13.5px; color: rgba(255,255,255,.7); margin-top: 4px; }
 
-.tab-page { display: none; flex-direction: column; gap: 18px; }
+.tab-page { display: none; flex-direction: column; gap: 18px; opacity: 0; }
 .tab-page.active { display: flex; }
+.tab-page.visible { opacity: 1; transition: opacity .25s ease; }
 
 /* 白色圆角卡片 */
 .panel {
   background: var(--card);
   -webkit-backdrop-filter: blur(8px);
   backdrop-filter: blur(8px);
-  border-radius: 16px;
-  box-shadow: 0 8px 24px rgba(0,0,0,.14);
+  border-radius: 12px;
+  box-shadow: 0 6px 18px rgba(0,0,0,.10);
   padding: 28px 32px;
   opacity: 0; transform: translateY(14px);
   animation: reveal .45s cubic-bezier(.2,.7,.3,1) forwards;
@@ -174,7 +185,7 @@ input::placeholder { color: #A8B3C4; }
 input:hover, select:hover { border-color: #CBD5E1; }
 input:focus, select:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(37,99,235,.18);
+  box-shadow: 0 0 0 3px rgba(255,143,101,.18);
 }
 select { cursor: pointer; -webkit-appearance: none; appearance: none;
   padding-right: 36px;
@@ -189,7 +200,7 @@ select option { background: #fff; color: var(--ink); }
   background: var(--accent); color: #fff;
   border: 1px solid transparent; border-radius: 12px;
   height: 44px; padding: 0 22px; cursor: pointer; white-space: nowrap;
-  box-shadow: 0 4px 12px rgba(37,99,235,.25);
+  box-shadow: 0 4px 12px rgba(255,111,53,.25);
   transition: background .2s, box-shadow .2s, transform .1s;
 }
 .btn:hover { background: var(--accent-deep); }
@@ -263,15 +274,16 @@ select option { background: #fff; color: var(--ink); }
 /* 解析结果卡 */
 .resolve-out { margin-top: 16px; min-height: 20px; }
 .rcard {
-  border-left: 3px solid var(--accent); background: #F8FAFC;
-  padding: 14px 18px; border-radius: 0 12px 12px 0;
+  background: #F8FAFC;
+  padding: 14px 18px; border-radius: 12px;
   font-size: 13.5px; line-height: 2;
+  border-top: 3px solid var(--accent);
   animation: reveal .3s ease forwards;
 }
-.rcard.miss { border-left-color: var(--danger); }
+.rcard.miss { border-top-color: var(--danger); }
 .rcard .tag {
   display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 10px;
-  border-radius: 9999px; background: #EFF6FF; color: var(--accent); margin-right: 10px;
+  border-radius: 9999px; background: #FFF3EC; color: var(--accent); margin-right: 10px;
 }
 .rcard.miss .tag { background: #FEF2F2; color: var(--danger); }
 .rcard .path { font-family: var(--mono); font-size: 12px; color: var(--ink-dim); word-break: break-all; }
@@ -298,8 +310,45 @@ td.path { font-family: var(--mono); font-size: 12px; color: var(--ink-dim); word
   font-family: var(--mono); font-size: 12px; }
 .log::-webkit-scrollbar { width: 8px; }
 .log::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
-.logline { padding: 7px 16px; display: flex; gap: 14px; align-items: baseline;
-  border-bottom: 1px solid #F1F5F9; line-height: 1.7; }
+/* 日志筛选栏 */
+.log-filters { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
+.log-filters input[type=text] { flex: 1; min-width: 140px; height: 36px; font-size: 13px; border-radius: 10px; }
+.log-filter-btn {
+  font-family: var(--body); font-size: 12px; font-weight: 500;
+  padding: 5px 12px; border-radius: 9999px;
+  border: 1px solid var(--line); background: #fff; color: var(--ink-mid);
+  cursor: pointer; transition: background .15s, color .15s, border-color .15s;
+}
+.log-filter-btn:hover { border-color: #CBD5E1; }
+.log-filter-btn.active { background: var(--brand); color: #fff; border-color: var(--brand); }
+.logline { padding: 7px 16px 7px 32px; display: flex; gap: 14px; align-items: baseline;
+  border-bottom: 1px solid #F1F5F9; line-height: 1.7;
+  transition: transform .15s ease, background .15s ease;
+  position: relative; cursor: pointer; }
+.logline:hover { transform: translateX(4px); background: rgba(255,143,101,.04); }
+/* 时间线：左侧竖线 + 圆点 */
+.logline::before {
+  content: "";
+  position: absolute; left: 12px; top: 0; bottom: 0;
+  width: 2px; background: #E2E8F0;
+}
+.logline:last-child::before { bottom: 50%; }
+.logline::after {
+  content: "";
+  position: absolute; left: 8px; top: 12px;
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--accent); border: 2px solid #F8FAFC;
+}
+.logline.is-interrupt::after { background: var(--brand); }
+.logline.is-fail::after { background: var(--danger); }
+/* 可折叠详情 */
+.log-detail {
+  display: none; padding: 6px 16px 10px 32px;
+  font-size: 12px; color: var(--ink-dim); line-height: 1.8;
+  border-bottom: 1px solid #F1F5F9;
+  background: #FAFBFC;
+}
+.log-detail.open { display: block; }
 .logline:last-child { border-bottom: none; }
 .logline .t { color: var(--ink-dim); white-space: nowrap; }
 .logline .act { color: var(--accent); font-weight: 600; min-width: 92px; }
@@ -376,12 +425,6 @@ td.path { font-family: var(--mono); font-size: 12px; color: var(--ink-dim); word
     <div class="status-block">
       <div class="status-title">服务状态</div>
       <div class="led-row"><span id="led-text">NATIVE CONSOLE · READY</span><span class="led" id="led"></span></div>
-      <div class="stats">
-        <div class="stat"><span>索引应用</span><span class="v" id="st-index">–</span></div>
-        <div class="stat"><span>用户别名</span><span class="v" id="st-user">–</span></div>
-        <div class="stat"><span>CONFIG 别名</span><span class="v" id="st-cfg">–</span></div>
-        <div class="stat"><span>打开范围</span><span class="v small" id="st-scope">–</span></div>
-      </div>
       <div class="foot">
         <b>边界</b>：本台仅注册别名、打开应用、改 LLM 配置、启停语音。关闭 / 删除 / 命令仅语音 + 二次确认。
       </div>
@@ -389,6 +432,14 @@ td.path { font-family: var(--mono); font-size: 12px; color: var(--ink-dim); word
   </aside>
 
   <main class="main">
+
+    <!-- 顶部状态横幅（P0：切页常驻） -->
+    <div class="top-bar">
+      <div class="bar-item"><span>索引应用</span><span class="bar-val" id="bar-index">–</span></div>
+      <div class="bar-item"><span>用户别名</span><span class="bar-val" id="bar-user">–</span></div>
+      <div class="bar-item"><span>CONFIG</span><span class="bar-val" id="bar-cfg">–</span></div>
+      <div class="bar-item"><span>打开范围</span><span class="bar-val" id="bar-scope">–</span></div>
+    </div>
 
     <!-- ═══════ 语音控制 ═══════ -->
     <div class="tab-page active" id="tab-voice">
@@ -587,6 +638,13 @@ td.path { font-family: var(--mono); font-size: 12px; color: var(--ink-dim); word
           <h2>最近记录</h2>
           <button type="button" class="btn ghost btn-log sm" id="log-btn">刷新</button>
         </div>
+        <div class="log-filters">
+          <input type="text" id="log-search" placeholder="搜索日志内容…">
+          <button type="button" class="log-filter-btn active" data-filter="all">全部</button>
+          <button type="button" class="log-filter-btn" data-filter="action">操作</button>
+          <button type="button" class="log-filter-btn" data-filter="interrupt">打断</button>
+          <button type="button" class="log-filter-btn" data-filter="error">错误</button>
+        </div>
         <div class="log" id="log-box"><div class="empty">载入中…</div></div>
       </section>
     </div>
@@ -615,10 +673,10 @@ async function refreshState() {
   const api = API(); if (!api) return;
   try {
     const s = await api.get_state();
-    $('st-index').textContent = s.index_count;
-    $('st-user').textContent = Object.keys(s.user_apps).length;
-    $('st-cfg').textContent = Object.keys(s.config_apps).length;
-    $('st-scope').textContent = s.index_enabled ? '全机应用' : '仅白名单';
+    $('bar-index').textContent = s.index_count;
+    $('bar-user').textContent = Object.keys(s.user_apps).length;
+    $('bar-cfg').textContent = Object.keys(s.config_apps).length;
+    $('bar-scope').textContent = s.index_enabled ? '全机应用' : '仅白名单';
     $('led').className = 'led';
     $('led-text').textContent = 'NATIVE CONSOLE · READY';
     renderTable(s);
@@ -680,13 +738,13 @@ async function resolve() {
   const r = await api.resolve(q);
   let html;
   if (r.status === 'found') {
-    html = `<div class="rcard"><span class="tag">${r.resolved_via === 'whitelist' ? '别名表' : '索引'}</span>
+    html = `<div class="rcard"><span class="tag">✓ ${r.resolved_via === 'whitelist' ? '别名表' : '索引'}</span>
       <b>${esc(r.display_name)}</b><br><span class="path">${esc(r.target)}</span></div>`;
   } else if (r.status === 'ambiguous') {
-    html = `<div class="rcard miss"><span class="tag">多个匹配</span>请说得更具体：<br>
+    html = `<div class="rcard miss"><span class="tag">⚠ 多个匹配</span>请说得更具体：<br>
       <span class="path">${(r.candidates || []).map(esc).join(' ・ ')}</span></div>`;
   } else {
-    html = `<div class="rcard miss"><span class="tag">未找到</span>「${esc(q)}」不在别名表和索引里 —— 可在上方注册</div>`;
+    html = `<div class="rcard miss"><span class="tag">✗ 未找到</span>「${esc(q)}」不在别名表和索引里 —— 可在上方注册</div>`;
   }
   $('res-out').innerHTML = html;
 }
@@ -702,24 +760,75 @@ async function openApp() {
 }
 
 /* ── 审计日志 ── */
-async function refreshLog() {
-  const api = API(); if (!api) return;
-  const r = await api.get_log(30);
-  if (!r.entries?.length) {
-    $('log-box').innerHTML = '<div class="empty">暂无记录</div>'; return;
+let _logEntries = [];
+let _logFilter = 'all';
+
+function renderLogEntries() {
+  let items = _logEntries;
+  if (_logFilter === 'action') items = items.filter(e => e.event !== 'interrupt' && e.success !== false);
+  else if (_logFilter === 'interrupt') items = items.filter(e => e.event === 'interrupt');
+  else if (_logFilter === 'error') items = items.filter(e => e.success === false);
+  const q = ($('log-search')?.value || '').trim().toLowerCase();
+  if (q) items = items.filter(e => {
+    const hay = ((e.raw_text || '') + ' ' + (e.action_type || '') + ' ' + (e.before_state || '')).toLowerCase();
+    return hay.includes(q);
+  });
+  if (!items.length) {
+    $('log-box').innerHTML = '<div class="empty">无匹配记录</div>'; return;
   }
-  $('log-box').innerHTML = r.entries.map(e => {
+  $('log-box').innerHTML = items.map((e, i) => {
     const t = (e.timestamp || '').replace('T', ' ');
     const act = e.event === 'interrupt' ? 'INTERRUPT' : (e.action_type || '?');
     const txt = e.event === 'interrupt'
       ? `打断 · 前状态 ${e.before_state}${e.cancelled_exit ? ' · 取消了退出' : ''}`
       : (e.raw_text || '');
     const ok = e.event === 'interrupt' ? null : !!e.success;
-    return `<div class="logline"><span class="t">${esc(t)}</span><span class="act">${esc(act)}</span>
+    const cls = e.event === 'interrupt' ? ' is-interrupt' : (e.success === false ? ' is-fail' : '');
+    const details = [];
+    if (e.intent) details.push(`意图: ${e.intent}`);
+    if (e.resolved_via) details.push(`来源: ${e.resolved_via}`);
+    if (e.target) details.push(`目标: ${e.target}`);
+    if (e.error) details.push(`错误: ${e.error}`);
+    const detailHtml = details.length
+      ? `<div class="log-detail" id="log-d-${i}">${details.map(esc).join('<br>')}</div>` : '';
+    return `<div class="logline${cls}" data-detail="log-d-${i}"><span class="t">${esc(t)}</span><span class="act">${esc(act)}</span>
       <span class="txt">${esc(txt)}</span>
-      ${ok === null ? '' : `<span class="st ${ok ? 'ok' : 'fail'}">${ok ? 'OK' : 'FAIL'}</span>`}</div>`;
+      ${ok === null ? '' : `<span class="st ${ok ? 'ok' : 'fail'}">${ok ? 'OK' : 'FAIL'}</span>`}</div>${detailHtml}`;
   }).join('');
 }
+
+async function refreshLog() {
+  const api = API(); if (!api) return;
+  const r = await api.get_log(30);
+  _logEntries = r.entries || [];
+  renderLogEntries();
+}
+
+// 筛选按钮点击
+document.addEventListener('click', e => {
+  const f = e.target?.dataset?.filter;
+  if (f) {
+    _logFilter = f;
+    document.querySelectorAll('.log-filter-btn').forEach(b => b.classList.toggle('active', b.dataset.filter === f));
+    renderLogEntries();
+    return;
+  }
+  // 日志行点击展开详情
+  const line = e.target?.closest?.('.logline');
+  if (line) {
+    const did = line.dataset.detail;
+    if (did) { const d = $(did); if (d) d.classList.toggle('open'); }
+  }
+});
+// 搜索框输入
+document.addEventListener('input', e => {
+  if (e.target?.id === 'log-search') renderLogEntries();
+});
+
+// 日志轮询：只在日志 tab 激活时运行
+let _logPoll = null;
+function startLogPoll() { if (!_logPoll) _logPoll = setInterval(refreshLog, 15000); }
+function stopLogPoll() { if (_logPoll) { clearInterval(_logPoll); _logPoll = null; } }
 
 /* ── LLM / ASR / TTS 设置 ── */
 // 若生效值不在 select 预置选项里（如 config 用了列表外的音色），临时补一个 option，
@@ -817,15 +926,19 @@ async function voiceStop() {
 
 /* ── 分页（侧栏导航沿用 .tabbar button，修订 22 拆成四页） ── */
 function initTabs() {
+  // 初始页直接可见
+  document.querySelector('.tab-page.active')?.classList.add('visible');
   document.querySelectorAll('.tabbar button').forEach(b => {
     b.onclick = () => {
       document.querySelectorAll('.tabbar button').forEach(x => x.classList.remove('active'));
-      document.querySelectorAll('.tab-page').forEach(x => x.classList.remove('active'));
+      document.querySelectorAll('.tab-page').forEach(x => { x.classList.remove('active', 'visible'); });
       b.classList.add('active');
-      $('tab-' + b.dataset.tab).classList.add('active');
+      const page = $('tab-' + b.dataset.tab);
+      page.classList.add('active');
+      requestAnimationFrame(() => requestAnimationFrame(() => page.classList.add('visible')));
       if (b.dataset.tab === 'voice') startVoicePoll(); else stopVoicePoll();
       if (b.dataset.tab === 'llm') loadSettings();
-      if (b.dataset.tab === 'log') refreshLog();
+      if (b.dataset.tab === 'log') { refreshLog(); startLogPoll(); } else stopLogPoll();
     };
   });
 }
@@ -851,7 +964,6 @@ function init() {
   refreshLog();
   loadSettings();
   startVoicePoll();   // 默认页是「语音控制」，开机即轮询状态
-  setInterval(refreshLog, 15000);
 }
 if (API()) init();  // 桥可能已就绪
 window.addEventListener('pywebviewready', init);

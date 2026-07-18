@@ -715,7 +715,30 @@ def run_gui() -> int:
                 pass
         api.voice_stop()
 
+    def _apply_dark_title_bar():
+        """用 DWM API 把主窗口标题栏切成暗色，与页面背景融合。"""
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            user32 = ctypes.windll.user32
+            dwmapi = ctypes.windll.dwmapi
+            user32.FindWindowW.restype = wintypes.HWND
+            user32.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
+            hwnd = user32.FindWindowW(None, "VOXCTL 控制台")
+            if not hwnd:
+                return
+            # DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+            val = ctypes.c_int(1)
+            dwmapi.DwmSetWindowAttribute(
+                hwnd, 20, ctypes.byref(val), ctypes.sizeof(val))
+        except Exception:  # noqa: BLE001
+            pass
+
     try:
+        window.events.shown += _apply_dark_title_bar
         window.events.closing += _on_closing
     except Exception:  # noqa: BLE001
         pass
