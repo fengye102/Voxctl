@@ -188,6 +188,39 @@ class TestApplyLocalOverrides:
         assert config["asr"]["model_size"] == "large"
         assert config["tts"]["voice"] == "v2"
 
+    def test_asr_tts_cloud_fields_overridden(self, tmp_path: Path) -> None:
+        """云端字段（provider/model/base_url + tts.tts_voice）也能叠加（修订 46）。"""
+        p = tmp_path / "local.yaml"
+        _write_yaml(p, {
+            "asr": {"provider": "openai", "model": "whisper-1",
+                    "base_url": "https://relay.example/v1"},
+            "tts": {"provider": "openai", "tts_voice": "nova",
+                    "model": "tts-1", "base_url": "https://relay.example/v1"},
+        })
+        config = _make_config()
+        ls.apply_local_overrides(config, p)
+        assert config["asr"]["provider"] == "openai"
+        assert config["asr"]["model"] == "whisper-1"
+        assert config["asr"]["base_url"] == "https://relay.example/v1"
+        assert config["tts"]["provider"] == "openai"
+        assert config["tts"]["tts_voice"] == "nova"
+        assert config["tts"]["model"] == "tts-1"
+        assert config["tts"]["base_url"] == "https://relay.example/v1"
+
+    def test_local_and_cloud_fields_coexist(self, tmp_path: Path) -> None:
+        """本地字段（model_size/voice）与云端字段并存，互不覆盖（修订 46）。"""
+        p = tmp_path / "local.yaml"
+        _write_yaml(p, {
+            "asr": {"model_size": "medium", "provider": "openai"},
+            "tts": {"voice": "zh-CN-YunxiNeural", "tts_voice": "alloy"},
+        })
+        config = _make_config()
+        ls.apply_local_overrides(config, p)
+        assert config["asr"]["model_size"] == "medium"
+        assert config["asr"]["provider"] == "openai"
+        assert config["tts"]["voice"] == "zh-CN-YunxiNeural"
+        assert config["tts"]["tts_voice"] == "alloy"
+
     def test_api_key_from_keyring_injected(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -204,6 +237,35 @@ class TestApplyLocalOverrides:
 
         assert os.environ.get(env_name) == "kr-secret-key"
         monkeypatch.delenv(env_name, raising=False)
+
+    def test_asr_tts_api_key_env_injected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """asr/tts 的 api_key_env（云端 OPENAI_API_KEY）也从 keyring 注入（修订 46）。
+
+        三块指向不同变量名时逐个注入；相同变量名去重只注入一次。
+        """
+        p = tmp_path / "local.yaml"
+        _write_yaml(p, {})
+        config = _make_config()
+        # llm 用 TEST_API_KEY，asr/tts 用同一个云端变量名 CLOUD_KEY（去重后注入一次）
+        config["asr"]["api_key_env"] = "CLOUD_KEY"
+        config["tts"]["api_key_env"] = "CLOUD_KEY"
+        for name in ("TEST_API_KEY", "CLOUD_KEY"):
+            monkeypatch.delenv(name, raising=False)
+
+        mock_kr = MagicMock()
+        mock_kr.get_password.side_effect = (
+            lambda service, user: {"TEST_API_KEY": "llm-key",
+                                   "CLOUD_KEY": "cloud-key"}.get(user)
+        )
+        with patch.object(ls, "_keyring", mock_kr):
+            ls.apply_local_overrides(config, p)
+
+        assert os.environ.get("TEST_API_KEY") == "llm-key"
+        assert os.environ.get("CLOUD_KEY") == "cloud-key"
+        for name in ("TEST_API_KEY", "CLOUD_KEY"):
+            monkeypatch.delenv(name, raising=False)
 
     def test_api_key_yaml_fallback(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -34,7 +34,7 @@ def log_action(
 ) -> None:
     """记录一次执行动作（§6 强制）。"""
     entry = {
-        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "timestamp": datetime.now().isoformat(timespec="milliseconds"),
         "raw_text": raw_text,
         "intent": getattr(intent, "intent", None),
         "intent_detail": safe_model_dump(intent),
@@ -61,7 +61,7 @@ def log_interrupt_event(
 ) -> None:
     """记录打断事件（§6 强制：审计日志必须记录打断事件本身）。"""
     entry = {
-        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "timestamp": datetime.now().isoformat(timespec="milliseconds"),
         "event": "interrupt",
         "before_state": before_state,
         "drained_chunks": drained_chunks,

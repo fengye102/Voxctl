@@ -44,6 +44,8 @@ _LOG = logging.getLogger(__name__)
 # silero-vad 在 16kHz 下要求的帧大小（512 samples = 32ms）
 CHUNK_SAMPLES = 512
 SAMPLE_RATE = 16000
+# 单帧时长（毫秒），供外部估算 VAD 静默期等时长用
+CHUNK_DURATION_MS = CHUNK_SAMPLES * 1000 // SAMPLE_RATE  # 32
 
 # silero-vad onnx 模型的上下文窗口（16kHz=64 samples）与 LSTM 状态形状（修订 21）。
 # 逐帧推理时 input = concat(context, chunk)，context 滚动保留上一帧尾部 64 samples。
@@ -175,6 +177,11 @@ class VADProcessor:
     # ------------------------------------------------------------------
     # 公开接口
     # ------------------------------------------------------------------
+
+    @property
+    def silence_confirm_frames(self) -> int:
+        """静默确认帧数（只读）。供外部估算 VAD 静默期时长（frames * 32ms）。"""
+        return self._cfg.silence_confirm_frames
 
     def process_chunk(
         self,

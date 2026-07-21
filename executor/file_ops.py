@@ -32,6 +32,53 @@ from nlu.schema import OpenFileIntent
 
 _LOG = logging.getLogger(__name__)
 
+# pywin32（pyttsx3 传递依赖，修订 41 已装）：解析 .lnk 快捷方式真实 target
+try:
+    import win32com.client  # type: ignore[import-not-found]
+    _HAS_WIN32COM = True
+except ImportError:
+    _HAS_WIN32COM = False
+
+
+# 修订 47 §6：文件扩展名白名单——open_file 只允许打开非可执行类，
+# 防止 .bat/.cmd/.ps1/.exe/.scr/.js 等经 os.startfile 文件关联绕过 whitelist.commands。
+# .lnk 不在此集合，单独走 _resolve_lnk_target 解析真实 target 后校验 target 扩展名。
+_ALLOWED_FILE_EXTENSIONS: frozenset[str] = frozenset({
+    # 文档
+    ".txt", ".md", ".rst", ".pdf", ".doc", ".docx", ".xls", ".xlsx",
+    ".ppt", ".pptx", ".odt", ".ods", ".odp", ".rtf", ".csv", ".json",
+    ".xml", ".html", ".htm", ".log",
+    # 图片
+    ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".svg", ".webp", ".ico",
+    ".tiff", ".tif",
+    # 音视频
+    ".mp3", ".wav", ".flac", ".aac", ".ogg", ".m4a", ".mp4", ".mkv",
+    ".avi", ".mov", ".webm", ".wmv",
+    # 压缩包
+    ".zip", ".7z", ".rar", ".tar", ".gz", ".bz2", ".xz",
+    # 电子书
+    ".epub", ".mobi",
+})
+
+
+def _resolve_lnk_target(lnk_path: Path) -> Optional[Path]:
+    """解析 .lnk 快捷方式的真实 target 路径（修订 47 §6）。
+
+    pywin32 可用时用 WScript.Shell COM 接口解析；不可用或解析失败返回 None，
+    调用方据此拒绝打开（.lnk 可能指向任意 .bat/.exe，不能放行）。
+    """
+    if not _HAS_WIN32COM:
+        return None
+    try:
+        shell = win32com.client.Dispatch("WScript.Shell")
+        shortcut = shell.CreateShortCut(str(lnk_path))
+        target = shortcut.TargetPath
+        if target:
+            return Path(target)
+    except Exception as exc:
+        _LOG.warning("解析 .lnk 失败 %s: %s", lnk_path, exc)
+    return None
+
 
 
 # 位置关键词 → 目录名匹配规则。键是用户口头可能说的中文词，
@@ -93,6 +140,38 @@ class FileOps:
                 success=False,
                 action_type="open_file",
                 error=f"路径不是文件: {resolved}",
+                payload={"raw_path": raw_path, "resolved_path": str(resolved)},
+            )
+
+        # 修订 47 §6：扩展名白名单校验，防止 .bat/.exe 等可执行文件经 os.startfile
+        # 文件关联绕过 whitelist.commands。.lnk 需解析真实 target 后校验 target 扩展名。
+        ext = resolved.suffix.lower()
+        if ext == ".lnk":
+            target = _resolve_lnk_target(resolved)
+            if target is None:
+                return ExecutionResult(
+                    success=False,
+                    action_type="open_file",
+                    error=".lnk 快捷方式无法解析真实目标（pywin32 未安装或解析失败）",
+                    payload={"raw_path": raw_path, "resolved_path": str(resolved)},
+                )
+            target_ext = target.suffix.lower()
+            if target_ext not in _ALLOWED_FILE_EXTENSIONS:
+                return ExecutionResult(
+                    success=False,
+                    action_type="open_file",
+                    error=f"快捷方式指向的文件类型不支持打开: {target_ext}",
+                    payload={
+                        "raw_path": raw_path,
+                        "resolved_path": str(resolved),
+                        "target_path": str(target),
+                    },
+                )
+        elif ext not in _ALLOWED_FILE_EXTENSIONS:
+            return ExecutionResult(
+                success=False,
+                action_type="open_file",
+                error=f"不支持打开此类型文件: {ext}",
                 payload={"raw_path": raw_path, "resolved_path": str(resolved)},
             )
 
@@ -188,9 +267,10 @@ class FileOps:
         for keyword in sorted(_LOCATION_KEYWORDS_EN.keys(), key=len, reverse=True):
             if raw_lower.startswith(keyword):
                 filename = raw_path[len(keyword):].strip()
-                filename = re.sub(r"^[\s'on]+\s*", "", filename, flags=re.IGNORECASE)
-                # 去掉 "on"/"in" 等英文连接词
-                filename = re.sub(r"^(on|in)\s+", "", filename, flags=re.IGNORECASE)
+                # 去掉前导空格/引号 + "on"/"in" 等英文连接词（单次 re.sub 合并）
+                filename = re.sub(
+                    r"^(?:[\s'on]+|(?:on|in)\s+)", "", filename, flags=re.IGNORECASE
+                )
                 if not filename:
                     continue
                 dir_path = self._find_location_dir(_LOCATION_KEYWORDS_EN[keyword])

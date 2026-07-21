@@ -19,7 +19,7 @@ import sys
 import unittest
 from pathlib import Path
 from typing import Optional
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
 
@@ -157,10 +157,9 @@ def _build_loop(**overrides) -> MainLoop:
 # 测试：_phase_listen
 # ======================================================================
 
-@patch("core.event_loop.state_emitter")
 class TestPhaseListen(unittest.IsolatedAsyncioTestCase):
 
-    async def test_no_segment_stays_listen(self, mock_emitter):
+    async def test_no_segment_stays_listen(self):
         """VAD 未检测到人声结束 → 状态保持 LISTEN。"""
         loop = _build_loop(vad=_make_vad(segment_on_call=None))
         loop._state.transition(State.LISTEN)
@@ -171,7 +170,7 @@ class TestPhaseListen(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(loop._state.state, State.LISTEN)
         self.assertIsNone(loop._pending_audio)
 
-    async def test_segment_detected_transitions_to_asr(self, mock_emitter):
+    async def test_segment_detected_transitions_to_asr(self):
         """VAD 检测到完整人声段 → 保存音频，切到 ASR。"""
         loop = _build_loop(vad=_make_vad(segment_on_call=0))
         loop._state.transition(State.LISTEN)
@@ -187,10 +186,9 @@ class TestPhaseListen(unittest.IsolatedAsyncioTestCase):
 # 测试：投机 ASR（P2 #11）
 # ======================================================================
 
-@patch("core.event_loop.state_emitter")
 class TestSpeculativeAsr(unittest.IsolatedAsyncioTestCase):
 
-    async def test_speculative_task_started_on_confirming_silence(self, mock_emitter):
+    async def test_speculative_task_started_on_confirming_silence(self):
         """VAD 进入 CONFIRMING_SILENCE → 投机 ASR 任务被创建。"""
         prelim = np.zeros(16000, dtype=np.float32)
         vad = _make_vad()
@@ -209,7 +207,7 @@ class TestSpeculativeAsr(unittest.IsolatedAsyncioTestCase):
 
         loop._speculative_asr_task.cancel()
 
-    async def test_speculative_not_started_when_not_confirming(self, mock_emitter):
+    async def test_speculative_not_started_when_not_confirming(self):
         """VAD 不在 CONFIRMING_SILENCE → 不启动投机 ASR。"""
         vad = _make_vad()
         vad.process_chunk = MagicMock(return_value=None)
@@ -224,7 +222,7 @@ class TestSpeculativeAsr(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNone(loop._speculative_asr_task)
 
-    async def test_speculative_result_used_on_final_segment(self, mock_emitter):
+    async def test_speculative_result_used_on_final_segment(self):
         """最终 segment 到达时，投机 ASR 已完成 → 用投机结果。"""
         final_seg = np.zeros(24000, dtype=np.float32)
         vad = _make_vad()
@@ -247,7 +245,7 @@ class TestSpeculativeAsr(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(loop._speculative_asr_result, asr_result)
         self.assertIsNone(loop._pending_audio)
 
-    async def test_speculative_cancelled_on_speech_resume(self, mock_emitter):
+    async def test_speculative_cancelled_on_speech_resume(self):
         """语音恢复（VAD 离开 CONFIRMING_SILENCE）→ 投机 ASR 被取消。"""
         vad = _make_vad()
         vad.process_chunk = MagicMock(return_value=None)
@@ -266,7 +264,7 @@ class TestSpeculativeAsr(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(0)  # Let cancellation propagate
         self.assertTrue(dummy_task.cancelled())
 
-    async def test_speculative_failure_falls_back_to_pending_audio(self, mock_emitter):
+    async def test_speculative_failure_falls_back_to_pending_audio(self):
         """投机 ASR 失败 → 回退到用最终 segment 走正常 ASR。"""
         final_seg = np.zeros(16000, dtype=np.float32)
         vad = _make_vad()
@@ -287,7 +285,7 @@ class TestSpeculativeAsr(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(loop._speculative_asr_result)
         self.assertIsNotNone(loop._pending_audio)
 
-    async def test_phase_asr_uses_speculative_result(self, mock_emitter):
+    async def test_phase_asr_uses_speculative_result(self):
         """_phase_asr 优先使用投机 ASR 结果，不再调 transcribe。"""
         asr = _make_asr(text="打开记事本")
         spec_result = asr.transcribe(np.zeros(16000, dtype=np.float32))
@@ -305,7 +303,7 @@ class TestSpeculativeAsr(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(loop._speculative_asr_result)
         self.assertEqual(loop._state.state, State.EXECUTE)
 
-    async def test_phase_asr_falls_back_when_no_speculative(self, mock_emitter):
+    async def test_phase_asr_falls_back_when_no_speculative(self):
         """无投机结果 → 正常调 transcribe。"""
         asr = _make_asr(text="打开记事本")
         parser = _make_parser(intent=OpenAppIntent(app_name="notepad"))
@@ -324,10 +322,9 @@ class TestSpeculativeAsr(unittest.IsolatedAsyncioTestCase):
 # 测试：_phase_asr
 # ======================================================================
 
-@patch("core.event_loop.state_emitter")
 class TestPhaseAsr(unittest.IsolatedAsyncioTestCase):
 
-    async def test_empty_asr_result_returns_to_listen(self, mock_emitter):
+    async def test_empty_asr_result_returns_to_listen(self):
         """ASR 返回空文本 → 静默回 LISTEN，不进 EXECUTE。"""
         asr = _make_asr(text="", is_empty=True)
         loop = _build_loop(asr_engine=asr)
@@ -338,7 +335,7 @@ class TestPhaseAsr(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(loop._state.state, State.LISTEN)
 
-    async def test_valid_text_transitions_to_execute(self, mock_emitter):
+    async def test_valid_text_transitions_to_execute(self):
         """ASR 识别出文本 → 意图解析 → 切到 EXECUTE。"""
         intent = OpenAppIntent(app_name="chrome")
         loop = _build_loop(
@@ -354,7 +351,7 @@ class TestPhaseAsr(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(loop._pending_intent, intent)
         self.assertEqual(loop._pending_text, "打开浏览器")
 
-    async def test_asr_exception_goes_to_tts_with_error(self, mock_emitter):
+    async def test_asr_exception_goes_to_tts_with_error(self):
         """ASR 抛异常 → 生成错误结果，切到 TTS 播报错误。"""
         asr = _make_asr()
         asr.transcribe = MagicMock(side_effect=RuntimeError("model crashed"))
@@ -369,7 +366,7 @@ class TestPhaseAsr(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(loop._pending_result.success)
         self.assertEqual(loop._pending_result.action_type, "asr_error")
 
-    async def test_intent_parse_exception_goes_to_tts(self, mock_emitter):
+    async def test_intent_parse_exception_goes_to_tts(self):
         """意图解析抛异常 → 生成错误结果，切到 TTS。"""
         parser = _make_parser()
         parser.parse = MagicMock(side_effect=RuntimeError("LLM down"))
@@ -388,10 +385,9 @@ class TestPhaseAsr(unittest.IsolatedAsyncioTestCase):
 # 测试：_phase_execute
 # ======================================================================
 
-@patch("core.event_loop.state_emitter")
 class TestPhaseExecute(unittest.IsolatedAsyncioTestCase):
 
-    async def test_unknown_intent_skips_executor(self, mock_emitter):
+    async def test_unknown_intent_skips_executor(self):
         """UnknownIntent → 不调 executor，直接生成错误结果切 TTS。"""
         executor = _make_executor()
         loop = _build_loop(executor=executor)
@@ -405,7 +401,7 @@ class TestPhaseExecute(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(loop._state.state, State.TTS)
         self.assertFalse(loop._pending_result.success)
 
-    async def test_normal_execution_transitions_to_tts(self, mock_emitter):
+    async def test_normal_execution_transitions_to_tts(self):
         """正常执行 → 结果存入 _pending_result，切 TTS。"""
         result = ExecutionResult(success=True, action_type="open_app")
         loop = _build_loop(executor=_make_executor(result=result))
@@ -418,7 +414,7 @@ class TestPhaseExecute(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(loop._state.state, State.TTS)
         self.assertEqual(loop._pending_result, result)
 
-    async def test_needs_confirmation_sets_pending(self, mock_emitter):
+    async def test_needs_confirmation_sets_pending(self):
         """needs_confirmation → 设置 pending，切 TTS 播报"确定要…吗？"。"""
         result = ExecutionResult(
             success=False, action_type="close_app",
@@ -435,7 +431,7 @@ class TestPhaseExecute(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(loop._state.pending)
         self.assertEqual(loop._state.pending.raw_text, "关闭记事本")
 
-    async def test_should_exit_does_NOT_set_exit_requested_rev14(self, mock_emitter):
+    async def test_should_exit_does_NOT_set_exit_requested_rev14(self):
         """修订 14 核心：should_exit=True 在 EXECUTE 阶段不置 exit_requested。
 
         exit_requested 延迟到 _phase_tts 正常播完后置位，
@@ -456,7 +452,7 @@ class TestPhaseExecute(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(loop._state.state, State.TTS)
         self.assertTrue(loop._pending_result.should_exit)
 
-    async def test_executor_exception_produces_error_result(self, mock_emitter):
+    async def test_executor_exception_produces_error_result(self):
         """executor 抛异常 → 兜底为失败结果，不崩。"""
         executor = _make_executor()
         executor.execute = MagicMock(side_effect=OSError("permission denied"))
@@ -471,7 +467,7 @@ class TestPhaseExecute(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(loop._pending_result.success)
         self.assertIn("OSError", loop._pending_result.error)
 
-    async def test_fallback_unknown_produces_llm_error(self, mock_emitter):
+    async def test_fallback_unknown_produces_llm_error(self):
         """LLM 调用失败降级的 UnknownIntent → action_type='llm_error'。"""
         loop = _build_loop()
         loop._state.transition(State.EXECUTE)
@@ -484,7 +480,7 @@ class TestPhaseExecute(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(loop._pending_result.action_type, "llm_error")
         self.assertIn("timeout", loop._pending_result.error)
 
-    async def test_genuine_unknown_produces_unknown(self, mock_emitter):
+    async def test_genuine_unknown_produces_unknown(self):
         """LLM 主动选择 unknown → action_type='unknown'（不是 llm_error）。"""
         loop = _build_loop()
         loop._state.transition(State.EXECUTE)
@@ -496,7 +492,7 @@ class TestPhaseExecute(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(loop._state.state, State.TTS)
         self.assertEqual(loop._pending_result.action_type, "unknown")
 
-    async def test_rate_limited_unknown_is_llm_error(self, mock_emitter):
+    async def test_rate_limited_unknown_is_llm_error(self):
         """限流降级 → llm_error，不是 unknown。"""
         loop = _build_loop()
         loop._state.transition(State.EXECUTE)
@@ -513,10 +509,9 @@ class TestPhaseExecute(unittest.IsolatedAsyncioTestCase):
 # 测试：_phase_tts（正常播完 / 打断 / 退出时序）
 # ======================================================================
 
-@patch("core.event_loop.state_emitter")
 class TestPhaseTts(unittest.IsolatedAsyncioTestCase):
 
-    async def test_normal_complete_returns_to_listen(self, mock_emitter):
+    async def test_normal_complete_returns_to_listen(self):
         """正常播完 → 状态切回 LISTEN，rounds +1。"""
         loop = _build_loop()
         loop._state.transition(State.TTS)
@@ -533,7 +528,7 @@ class TestPhaseTts(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(loop._state.rounds_completed, 1)
         self.assertFalse(loop._state.exit_requested)
 
-    async def test_normal_complete_with_pending_goes_to_await_confirm(self, mock_emitter):
+    async def test_normal_complete_with_pending_goes_to_await_confirm(self):
         """正常播完 needs_confirm 的结果 → 切到 AWAIT_CONFIRM。"""
         loop = _build_loop()
         result = ExecutionResult(
@@ -554,7 +549,7 @@ class TestPhaseTts(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(loop._state.state, State.AWAIT_CONFIRM)
         self.assertIsNotNone(loop._state.pending)
 
-    async def test_exit_requested_set_only_after_tts_completes_rev14(self, mock_emitter):
+    async def test_exit_requested_set_only_after_tts_completes_rev14(self):
         """修订 14 核心：should_exit 的结果正常播完后才置 exit_requested。"""
         loop = _build_loop()
         loop._state.transition(State.TTS)
@@ -571,7 +566,7 @@ class TestPhaseTts(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(loop._state.exit_requested,
                         "TTS 正常播完后必须置 exit_requested")
 
-    async def test_interrupt_cancels_exit_rev13(self, mock_emitter):
+    async def test_interrupt_cancels_exit_rev13(self):
         """修订 13 核心：打断"再见"播报 → exit_requested 从未置上，回 LISTEN。"""
         player = _make_player()
         vad = _make_vad()
@@ -601,7 +596,7 @@ class TestPhaseTts(unittest.IsolatedAsyncioTestCase):
                          "打断退出播报 → exit_requested 不得置位（修订 13）")
         self.assertEqual(loop._state.state, State.LISTEN)
 
-    async def test_interrupt_clears_pending_confirmation(self, mock_emitter):
+    async def test_interrupt_clears_pending_confirmation(self):
         """打断确认提示播报 → pending 被清掉，不进 AWAIT_CONFIRM。"""
         vad = _make_vad()
         vad.process_chunk_interrupt = MagicMock(return_value=True)
@@ -633,7 +628,7 @@ class TestPhaseTts(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(loop._state.pending)
         self.assertEqual(loop._state.state, State.LISTEN)
 
-    async def test_none_result_returns_to_listen(self, mock_emitter):
+    async def test_none_result_returns_to_listen(self):
         """_pending_result 为 None → 直接回 LISTEN。"""
         loop = _build_loop()
         loop._state.transition(State.TTS)
@@ -643,8 +638,8 @@ class TestPhaseTts(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(loop._state.state, State.LISTEN)
 
-    async def test_tts_failure_emits_error_and_returns_to_listen(self, mock_emitter):
-        """TTS 合成失败（如网络断）→ emit_error 到浮窗，正常切回 LISTEN。"""
+    async def test_tts_failure_emits_error_and_returns_to_listen(self):
+        """TTS 合成失败（如网络断）→ 走异常分支，正常切回 LISTEN。"""
         tts = _make_tts()
         tts.speak_result = AsyncMock(side_effect=TTSSynthesizeError("network down"))
 
@@ -660,9 +655,8 @@ class TestPhaseTts(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(loop._state.state, State.LISTEN)
         self.assertEqual(loop._state.rounds_completed, 1)
-        mock_emitter.emit_error.assert_called_with("语音播报失败")
 
-    async def test_tts_failure_on_exit_still_sets_exit_requested(self, mock_emitter):
+    async def test_tts_failure_on_exit_still_sets_exit_requested(self):
         """TTS 合成失败 + should_exit → exit_requested 仍置位（用户意图有效）。"""
         tts = _make_tts()
         tts.speak_result = AsyncMock(side_effect=TTSSynthesizeError("network"))
@@ -678,7 +672,7 @@ class TestPhaseTts(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(loop._state.exit_requested,
                         "TTS 失败不影响退出意图")
 
-    async def test_tts_failure_with_pending_still_goes_to_await_confirm(self, mock_emitter):
+    async def test_tts_failure_with_pending_still_goes_to_await_confirm(self):
         """TTS 合成失败 + 有 pending → 仍切 AWAIT_CONFIRM（确认问题没说出来但流程继续）。"""
         tts = _make_tts()
         tts.speak_result = AsyncMock(side_effect=TTSSynthesizeError("network"))
@@ -705,7 +699,6 @@ class TestPhaseTts(unittest.IsolatedAsyncioTestCase):
 # 测试：二次确认流程（_handle_confirm_response）
 # ======================================================================
 
-@patch("core.event_loop.state_emitter")
 class TestConfirmFlow(unittest.IsolatedAsyncioTestCase):
 
     def _setup_pending(self, loop: MainLoop) -> ExecutionResult:
@@ -720,7 +713,7 @@ class TestConfirmFlow(unittest.IsolatedAsyncioTestCase):
         )
         return result
 
-    async def test_confirm_re_executes_with_confirmed_true(self, mock_emitter):
+    async def test_confirm_re_executes_with_confirmed_true(self):
         """ConfirmIntent → 用原 intent + confirmed=True 重新执行。"""
         confirmed_result = ExecutionResult(
             success=True, action_type="close_app",
@@ -740,7 +733,7 @@ class TestConfirmFlow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(loop._pending_result, confirmed_result)
         self.assertIsNone(loop._state.pending)
 
-    async def test_cancel_discards_pending(self, mock_emitter):
+    async def test_cancel_discards_pending(self):
         """CancelIntent → 丢弃 pending，生成"已取消"结果。"""
         loop = _build_loop()
         self._setup_pending(loop)
@@ -751,7 +744,7 @@ class TestConfirmFlow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(loop._state.state, State.TTS)
         self.assertEqual(loop._pending_result.action_type, "cancel")
 
-    async def test_other_intent_treats_as_change_of_mind(self, mock_emitter):
+    async def test_other_intent_treats_as_change_of_mind(self):
         """非 Confirm/Cancel 意图 → 丢弃 pending，按新意图正常走。"""
         new_intent = OpenAppIntent(app_name="chrome")
         loop = _build_loop()
@@ -852,10 +845,9 @@ class TestFormatResultErrorTemplates(unittest.TestCase):
 # 测试：_main_loop 多步端到端
 # ======================================================================
 
-@patch("core.event_loop.state_emitter")
 class TestMainLoopIntegration(unittest.IsolatedAsyncioTestCase):
 
-    async def test_full_cycle_listen_to_tts_and_back(self, mock_emitter):
+    async def test_full_cycle_listen_to_tts_and_back(self):
         """完整一轮：LISTEN → ASR → EXECUTE → TTS → LISTEN。"""
         vad = _make_vad(segment_on_call=0)
         asr = _make_asr(text="打开记事本")
@@ -891,7 +883,7 @@ class TestMainLoopIntegration(unittest.IsolatedAsyncioTestCase):
         tts.speak_result.assert_called_once_with(result)
         executor.execute.assert_called_once()
 
-    async def test_exit_full_cycle_rev14(self, mock_emitter):
+    async def test_exit_full_cycle_rev14(self):
         """退出完整流程：EXECUTE 不置位 → TTS 播完"再见" → exit_requested。"""
         vad = _make_vad(segment_on_call=0)
         intent = ExitProgramIntent()
@@ -920,7 +912,7 @@ class TestMainLoopIntegration(unittest.IsolatedAsyncioTestCase):
         await loop._phase_tts()
         self.assertTrue(loop._state.exit_requested, "TTS 播完后才置位")
 
-    async def test_confirm_full_cycle(self, mock_emitter):
+    async def test_confirm_full_cycle(self):
         """确认流程端到端：EXECUTE → TTS("确定？") → AWAIT_CONFIRM
         → ASR("确定") → EXECUTE(confirmed) → TTS(结果) → LISTEN。
         """
@@ -1004,7 +996,7 @@ class TestMainLoopIntegration(unittest.IsolatedAsyncioTestCase):
         # executor 被调用 2 次：第一次 confirmed=False，第二次 confirmed=True
         self.assertEqual(executor.execute.call_count, 2)
 
-    async def test_error_recovery_returns_to_listen(self, mock_emitter):
+    async def test_error_recovery_returns_to_listen(self):
         """单轮异常不崩主循环：executor 抛异常 → 错误结果 → TTS 播报 → LISTEN。"""
         executor = _make_executor()
         executor.execute = MagicMock(side_effect=RuntimeError("boom"))
@@ -1032,10 +1024,9 @@ class TestMainLoopIntegration(unittest.IsolatedAsyncioTestCase):
 # 测试：审计日志写入（影子实现从未覆盖的副作用）
 # ======================================================================
 
-@patch("core.event_loop.state_emitter")
 class TestAuditLogWritten(unittest.IsolatedAsyncioTestCase):
 
-    async def test_execute_writes_audit_log(self, mock_emitter):
+    async def test_execute_writes_audit_log(self):
         """executor.execute 写审计日志到 actions.log（§6 强制）。"""
         import tempfile
 
@@ -1061,7 +1052,7 @@ class TestAuditLogWritten(unittest.IsolatedAsyncioTestCase):
             # 但 _phase_tts 打断路径会调 log_interrupt_event（直接写文件）。
             # 此测试验证 TTS 打断场景的审计日志。
 
-    async def test_interrupt_writes_audit_log(self, mock_emitter):
+    async def test_interrupt_writes_audit_log(self):
         """打断事件写审计日志（§6 强制：审计日志必须记录打断事件本身）。"""
         import json
         import tempfile
@@ -1112,10 +1103,9 @@ class TestAuditLogWritten(unittest.IsolatedAsyncioTestCase):
 # TTS 被跳过"的 bug。
 # ======================================================================
 
-@patch("core.event_loop.state_emitter")
 class TestMainLoopWhileLoop(unittest.IsolatedAsyncioTestCase):
 
-    async def test_main_loop_runs_through_exit(self, mock_emitter):
+    async def test_main_loop_runs_through_exit(self):
         """_main_loop() 完整跑通一轮到退出，验证 while 循环正确终止。"""
         vad = _make_vad(segment_on_call=0)
         asr = _make_asr(text="退出程序")
@@ -1149,7 +1139,7 @@ class TestMainLoopWhileLoop(unittest.IsolatedAsyncioTestCase):
         tts.speak_result.assert_called_once()
         self.assertTrue(tts.speak_result.call_args[0][0].should_exit)
 
-    async def test_main_loop_error_recovery_then_exit(self, mock_emitter):
+    async def test_main_loop_error_recovery_then_exit(self):
         """_main_loop() 中单轮异常 → 播报"出错了" → 继续循环 → 正常退出。"""
         call_count = {"n": 0}
 
@@ -1198,7 +1188,7 @@ class TestMainLoopWhileLoop(unittest.IsolatedAsyncioTestCase):
         # 第二轮正常退出 → exit 结果播报
         self.assertEqual(tts.speak_result.call_count, 2)
 
-    async def test_main_loop_multiple_rounds(self, mock_emitter):
+    async def test_main_loop_multiple_rounds(self):
         """_main_loop() 连续多轮：2 轮 open_app + 1 轮 exit。"""
         intents = iter([
             OpenAppIntent(app_name="chrome"),
@@ -1250,6 +1240,262 @@ class TestMainLoopWhileLoop(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(loop._state.exit_requested)
         self.assertEqual(tts.speak_result.call_count, 3)
         self.assertEqual(executor.execute.call_count, 3)
+
+
+# ======================================================================
+# 测试：C3 投机 ASR 质量校验（修订 47）
+# ======================================================================
+
+class TestSpeculativeAsrQualityGate(unittest.IsolatedAsyncioTestCase):
+    """C3：投机 ASR 质量校验——满足任一条件即丢弃，回退最终 segment：
+    - is_empty=True（空文本）
+    - no_speech_prob > 0.8（高静音概率）
+    - avg_logprob < -1.0（低平均对数概率，修订 48 新增）
+
+    投机用的是 preliminary_segment，比最终 segment 短，质量可能更差。
+    质量校验避免把低质量结果带回 ASR 阶段，影响意图解析。
+    """
+
+    async def test_speculative_empty_result_discarded(self):
+        """投机结果 is_empty=True → 丢弃，回退用最终 segment。"""
+        final_seg = np.zeros(16000, dtype=np.float32)
+        vad = _make_vad()
+        vad.process_chunk = MagicMock(return_value=final_seg)
+
+        asr = _make_asr(text="打开记事本")
+        loop = _build_loop(vad=vad, asr_engine=asr)
+        loop._state.transition(State.LISTEN)
+
+        # 投机任务返回空结果
+        empty_result = MagicMock()
+        empty_result.is_empty = True
+        empty_result.no_speech_prob = 0.1
+        empty_result.avg_logprob = -0.3
+        loop._speculative_asr_task = asyncio.create_task(_async_return(empty_result))
+        await asyncio.sleep(0)  # 让 task 完成
+
+        await loop._audio_queue.put(_silence()[0])
+        await loop._phase_listen()
+
+        # 丢弃了投机结果，回退到最终 segment
+        self.assertEqual(loop._state.state, State.ASR)
+        self.assertIsNone(loop._speculative_asr_result)
+        self.assertIsNotNone(loop._pending_audio, "应回退到 _pending_audio 走正常 ASR")
+
+    async def test_speculative_high_no_speech_prob_discarded(self):
+        """投机结果 no_speech_prob=0.85 > 0.8 → 丢弃。"""
+        final_seg = np.zeros(16000, dtype=np.float32)
+        vad = _make_vad()
+        vad.process_chunk = MagicMock(return_value=final_seg)
+
+        asr = _make_asr(text="打开记事本")
+        loop = _build_loop(vad=vad, asr_engine=asr)
+        loop._state.transition(State.LISTEN)
+
+        bad_result = MagicMock()
+        bad_result.is_empty = False
+        bad_result.no_speech_prob = 0.85
+        bad_result.avg_logprob = -0.3
+        loop._speculative_asr_task = asyncio.create_task(_async_return(bad_result))
+        await asyncio.sleep(0)
+
+        await loop._audio_queue.put(_silence()[0])
+        await loop._phase_listen()
+
+        self.assertEqual(loop._state.state, State.ASR)
+        self.assertIsNone(loop._speculative_asr_result)
+        self.assertIsNotNone(loop._pending_audio)
+
+    async def test_speculative_low_logprob_discarded(self):
+        """修订 48 C3：投机结果 avg_logprob=-1.5 < -1.0 → 丢弃（幻觉短文本）。"""
+        final_seg = np.zeros(16000, dtype=np.float32)
+        vad = _make_vad()
+        vad.process_chunk = MagicMock(return_value=final_seg)
+
+        asr = _make_asr(text="打开记事本")
+        loop = _build_loop(vad=vad, asr_engine=asr)
+        loop._state.transition(State.LISTEN)
+
+        halluc_result = MagicMock()
+        halluc_result.is_empty = False  # 非空，绕过 is_empty 闸门
+        halluc_result.no_speech_prob = 0.1  # 低，绕过 no_speech 闸门
+        halluc_result.avg_logprob = -1.5  # 低于 -1.0 阈值 → 丢弃
+        loop._speculative_asr_task = asyncio.create_task(_async_return(halluc_result))
+        await asyncio.sleep(0)
+
+        await loop._audio_queue.put(_silence()[0])
+        await loop._phase_listen()
+
+        self.assertEqual(loop._state.state, State.ASR)
+        self.assertIsNone(loop._speculative_asr_result, "低 logprob 幻觉应被丢弃")
+        self.assertIsNotNone(loop._pending_audio, "应回退到最终 segment")
+
+    async def test_speculative_quality_borderline_kept(self):
+        """投机结果 no_speech_prob=0.5 / avg_logprob=-0.5 → 三闸门全过，保留使用。"""
+        final_seg = np.zeros(16000, dtype=np.float32)
+        vad = _make_vad()
+        vad.process_chunk = MagicMock(return_value=final_seg)
+
+        asr = _make_asr(text="打开记事本")
+        loop = _build_loop(vad=vad, asr_engine=asr)
+        loop._state.transition(State.LISTEN)
+
+        good_result = MagicMock()
+        good_result.is_empty = False
+        good_result.no_speech_prob = 0.5  # 边界值，低于 0.8 阈值
+        good_result.avg_logprob = -0.5  # 高于 -1.0 阈值
+        loop._speculative_asr_task = asyncio.create_task(_async_return(good_result))
+        await asyncio.sleep(0)
+
+        await loop._audio_queue.put(_silence()[0])
+        await loop._phase_listen()
+
+        self.assertEqual(loop._state.state, State.ASR)
+        self.assertEqual(loop._speculative_asr_result, good_result,
+                         "三闸门全过应保留投机结果")
+        self.assertIsNone(loop._pending_audio)
+
+    async def test_speculative_logprob_borderline_kept(self):
+        """修订 48 C3：avg_logprob=-0.8（刚高于 -1.0 阈值）→ 保留。"""
+        final_seg = np.zeros(16000, dtype=np.float32)
+        vad = _make_vad()
+        vad.process_chunk = MagicMock(return_value=final_seg)
+
+        asr = _make_asr(text="打开记事本")
+        loop = _build_loop(vad=vad, asr_engine=asr)
+        loop._state.transition(State.LISTEN)
+
+        borderline_result = MagicMock()
+        borderline_result.is_empty = False
+        borderline_result.no_speech_prob = 0.1
+        borderline_result.avg_logprob = -0.8  # 刚高于 -1.0，保留
+        loop._speculative_asr_task = asyncio.create_task(_async_return(borderline_result))
+        await asyncio.sleep(0)
+
+        await loop._audio_queue.put(_silence()[0])
+        await loop._phase_listen()
+
+        self.assertEqual(loop._state.state, State.ASR)
+        self.assertEqual(loop._speculative_asr_result, borderline_result,
+                         "avg_logprob=-0.8 应通过 -1.0 阈值")
+
+
+# ======================================================================
+# 测试：P1 speaker 模式打断开关（修订 47）
+# ======================================================================
+
+class TestSpeakerInterruptSwitch(unittest.IsolatedAsyncioTestCase):
+    """P1：speaker + speaker_interrupt_enabled=False → 跳过 monitor；
+    speaker + True → 启动 monitor；headphone 不受开关影响始终启动 monitor。
+
+    speaker 模式关闭打断时仍要 drain_queue + vad.reset，清掉 TTS 期间
+    累积的泄漏音频块，避免下一轮 LISTEN 立即被泄漏音频误触发。
+    """
+
+    async def test_speaker_mode_no_interrupt_skips_monitor(self):
+        """speaker + interrupt_enabled=False → 不启动 monitor、不调 interrupt_coord.reset。"""
+        vad = _make_vad()
+        interrupt_coord = MagicMock()
+        interrupt_coord.interrupted = False
+        interrupt_coord.reset = MagicMock()
+        # monitor 不应被调用；用 AsyncMock 避免 return_value 产生未 await 的 coroutine
+        interrupt_coord.monitor = AsyncMock()
+
+        loop = _build_loop(
+            vad=vad,
+            output_mode=OutputMode.SPEAKER,
+            speaker_interrupt_enabled=False,
+        )
+        loop._interrupt_coord = interrupt_coord
+        loop._state.transition(State.TTS)
+        loop._pending_result = ExecutionResult(
+            success=True, action_type="open_app",
+        )
+        # 故意往队列里塞 TTS 泄漏音频块，验证会被 drain
+        leak_chunk = np.zeros(CHUNK_SAMPLES, dtype=np.float32)
+        for _ in range(3):
+            await loop._audio_queue.put(leak_chunk)
+
+        await loop._phase_tts()
+
+        # interrupt_coord 没启动 monitor，reset 也没调
+        interrupt_coord.reset.assert_not_called()
+        # 队列被 drain 干净
+        self.assertTrue(loop._audio_queue.empty(),
+                        "speaker 关打断时应 drain 掉 TTS 泄漏音频块")
+        # VAD reset 被调
+        vad.reset.assert_called_once()
+        # 正常切回 LISTEN
+        self.assertEqual(loop._state.state, State.LISTEN)
+
+    async def test_speaker_mode_with_interrupt_enabled_starts_monitor(self):
+        """speaker + interrupt_enabled=True → 启动 monitor（按阈值判定打断）。"""
+        vad = _make_vad()
+        loop = _build_loop(
+            vad=vad,
+            output_mode=OutputMode.SPEAKER,
+            speaker_interrupt_enabled=True,
+        )
+        loop._state.transition(State.TTS)
+        loop._pending_result = ExecutionResult(
+            success=True, action_type="open_app",
+        )
+        for c in _silence(3):
+            await loop._audio_queue.put(c)
+
+        # 用真实 InterruptCoordinator 跑：静默 chunk 不应触发打断
+        await loop._phase_tts()
+
+        self.assertEqual(loop._state.state, State.LISTEN)
+        self.assertFalse(loop._interrupt_coord.interrupted)
+        # 启动了 monitor → reset 应被调（monitor 进入前 reset VAD）
+        vad.reset.assert_called()
+
+    async def test_headphone_mode_starts_monitor_regardless_of_switch(self):
+        """headphone + speaker_interrupt_enabled=False → 仍启动 monitor。
+
+        开关只控制 speaker 模式；headphone 不存在 TTS 泄漏问题，始终启用打断。
+        """
+        vad = _make_vad()
+        loop = _build_loop(
+            vad=vad,
+            output_mode=OutputMode.HEADPHONE,
+            speaker_interrupt_enabled=False,  # 默认值
+        )
+        loop._state.transition(State.TTS)
+        loop._pending_result = ExecutionResult(
+            success=True, action_type="open_app",
+        )
+        for c in _silence(3):
+            await loop._audio_queue.put(c)
+
+        await loop._phase_tts()
+
+        self.assertEqual(loop._state.state, State.LISTEN)
+        # headphone 启用了 monitor → reset 被调（monitor 进入前 reset VAD）
+        vad.reset.assert_called()
+
+    async def test_speaker_no_interrupt_still_completes_exit(self):
+        """speaker 关打断 + should_exit → TTS 正常播完后置 exit_requested。
+
+        回归保护：跳过 monitor 不应影响退出流程的时序（修订 14）。
+        """
+        vad = _make_vad()
+        loop = _build_loop(
+            vad=vad,
+            output_mode=OutputMode.SPEAKER,
+            speaker_interrupt_enabled=False,
+        )
+        loop._state.transition(State.TTS)
+        loop._pending_result = ExecutionResult(
+            success=True, action_type="exit_program", should_exit=True,
+        )
+        self.assertFalse(loop._state.exit_requested)
+
+        await loop._phase_tts()
+
+        self.assertTrue(loop._state.exit_requested,
+                        "speaker 关打断不应影响退出标志置位")
 
 
 # ======================================================================

@@ -23,6 +23,12 @@ vad:
   adaptive_threshold: true
   # 自适应余量：噪声基线 p95 上方的安全间距（0.05-0.15 范围调整）
   adaptive_margin: 0.10
+  # 外放模式打断开关（修订 47，CLAUDE.md §8.4）：
+  #   false = speaker 模式下关闭打断监听（单向播报，TTS 期间不跑 InterruptCoordinator）
+  #           实测 silero-vad 对 TTS 泄漏概率 0.88-0.97，调阈值无效，默认关闭避免误触发
+  #   true  = 启用外放打断（接受误触发风险，需配合高阈值 + speech_confirm_frames）
+  # headphone 模式不受此开关影响，始终启用打断
+  speaker_interrupt_enabled: false
   # ─── 打断阈值调优指南（Step 8） ───────────────────────────────────
   # 症状 → 调整方向：
   #  - 误触发打断（播报时自己打断自己）：调高 interrupt_threshold_*
@@ -36,6 +42,9 @@ vad:
   # 调优依据：日志里的 VAD interrupt triggered 行（prob=X, threshold=Y, consecutive=Z）
 
 asr:
+  # ASR provider（CLAUDE.md §2.2）：local = 本地 faster-whisper（默认）/ openai = 云端 OpenAI 兼容
+  # 云端只做 OpenAI 格式（Anthropic 无音频端点），下面 model/api_key_env/base_url/timeout 仅 provider=openai 时生效
+  provider: local
   # faster-whisper 模型大小：small（约 500MB）/ base / medium / large
   # 默认 small：base 在安静环境下 CER 不达标（> 10%），已升级（CLAUDE.md §2）
   model_size: small
@@ -48,6 +57,11 @@ asr:
   # 繁简转换：Whisper 中文模型对大陆普通话有时输出繁体字符，用 opencc t2s 字符级转换
   # true = 启用（推荐）；false = 禁用（仅在排查 opencc 问题时关闭）
   opencc_enabled: true
+  # --- 以下仅 provider=openai 时生效（云端 ASR，CLAUDE.md §2.2 / §8.12）---
+  model: whisper-1              # 云端模型标识（中转站可能是自定义别名）
+  api_key_env: OPENAI_API_KEY  # 从环境变量读取 key，不写明文（§6 铁律）
+  base_url: ""                 # 留空 = 官方端点；填中转站 URL 前先验证 /v1/audio/transcriptions（§8.9）
+  timeout: 30                  # 单次请求超时秒数
 
 llm:
   # provider 决定实例化哪个 LLMClient 实现（CLAUDE.md §2.1）
@@ -57,29 +71,32 @@ llm:
   api_key_env: ANTHROPIC_API_KEY
   # 留空 = 走官方端点；填中转站 URL 时需提前验证 tool use 支持（CLAUDE.md §8.9）
   # 中转站 URL 只填根域名，SDK 会自动拼接 /v1/messages 路径
-  base_url: "https://cdn.keeps.cc"
+  # 默认留空：新环境/他人克隆不绑个人中转（修订 47）
+  base_url: ""
   # 单次请求超时秒数（中转站比官方端点慢，给足时间避免误报超时）
   # SDK 默认还会重试 2 次，总耗时最多 ≈ timeout × 3 + 退避
   timeout: 30
 
 tts:
-  voice: zh-CN-XiaoxiaoNeural    # Edge TTS 中文音色
-  # pyttsx3 本地后备：edge-tts 网络异常时自动降级到 SAPI5 本地引擎（修订 34）
+  # TTS provider（CLAUDE.md §2.2）：edge = 本地 edge-tts（默认）/ openai = 云端 OpenAI 兼容
+  # 云端只做 OpenAI 格式（Anthropic 无音频端点），下面 model/tts_voice/api_key_env/base_url/timeout 仅 provider=openai 时生效
+  provider: edge
+  voice: zh-CN-XiaoxiaoNeural    # Edge TTS 中文音色（provider=edge 时用）
+  # pyttsx3 本地后备：edge-tts / 云端 TTS 失败时自动降级到 SAPI5 本地引擎（修订 34/45）
   local_fallback: true
+  # --- 以下仅 provider=openai 时生效（云端 TTS，CLAUDE.md §2.2）---
+  model: tts-1                 # 云端模型标识（中转站可能是自定义别名）
+  tts_voice: alloy             # 云端音色（OpenAI: alloy/echo/fable/onyx/nova/shimmer）
+  api_key_env: OPENAI_API_KEY  # 从环境变量读取 key，不写明文（§6 铁律）
+  base_url: ""                 # 留空 = 官方端点；填中转站 URL 前先验证 /v1/audio/speech（§8.9）
+  timeout: 30                  # 单次请求超时秒数
 
 ui:
-  # 屏幕状态浮窗（光圈）总开关（CLAUDE.md §8.11 / 修订 26）
-  #   true  = GUI 控制台运行时在屏幕底部居中显示随语音状态变色的浮窗（默认）
-  #   false = 不显示浮窗，且语音子进程不产状态行（不污染控制台输出）
-  # 浮窗只在 GUI 角色渲染，纯视觉反馈；修订 33 起可点击 toggle 语音启停（非破坏性）
-  status_overlay: true
-
-  # 全局键盘热键 toggle 语音启停（CLAUDE.md §8.11 / §6 / 修订 33）
-  #   点击光圈 与 按此热键 都是「启停语音子进程」的等价触发（非破坏性，免二次确认）
+  # 全局键盘热键 toggle 语音启停（CLAUDE.md §6 / 修订 33；修订 50 起浮窗已删，热键是唯一 toggle 入口之一，另入口是 GUI 控制台按钮）
   #   格式：修饰键 + 主键，用 + 连接，如 "ctrl+alt+v" / "ctrl+shift+space"
   #   修饰键支持 ctrl / alt / shift / win；GUI 控制台可改，覆盖写入 voxctl.local.yaml
   hotkey: "ctrl+alt+v"
-  #   false = 不注册全局热键（只保留点击光圈 toggle）；热键被占用时启动会记日志并跳过
+  #   false = 不注册全局热键；热键被占用时启动会记日志并跳过
   hotkey_enabled: true
 
 plugins:
@@ -103,16 +120,21 @@ whitelist:
   # 每条命令需标注 dangerous: true/false（CLAUDE.md §6）
   # command 用列表形式传给 subprocess，禁止 shell=True 任意拼接（CLAUDE.md §6 明确禁止）
   # name 是 RunCommandIntent.command_name 要匹配的键
+  # allow_args（修订 47）：false=拒绝带 args 调用（默认）；true=允许 RunCommandIntent.args 追加到 command 末尾
+  #   dangerous: true 的命令强制 allow_args=false（§6 强制），配置里显式写 true 也会被覆盖为 false
   commands:
     - name: lock_screen
       command: ['rundll32.exe', 'user32.dll,LockWorkStation']
       dangerous: false
+      allow_args: false
     - name: empty_recycle_bin
       command: ['powershell', '-NoProfile', '-Command', 'Clear-RecycleBin -Force']
       dangerous: true
+      allow_args: false   # dangerous 命令强制禁 args（§6 修订 47）
     - name: show_ip
       command: ['powershell', '-NoProfile', '-Command', '(Get-NetIPAddress -AddressFamily IPv4 -InterfaceAlias Wi-Fi).IPAddress']
       dangerous: false
+      allow_args: false
   paths:
     - "%USERPROFILE%\\Desktop"
     - "%USERPROFILE%\\Documents"

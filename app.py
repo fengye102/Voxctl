@@ -11,12 +11,13 @@
 subprocess 拉起 `sys.executable --voice` 作为独立子进程（§4/§16：语音主循环不依赖 GUI）。
 
 frozen --windowed 下无控制台，sys.stdout/stderr 为 None——需重定向避免 print/日志崩。
-但两种角色的重定向目标不同（修订 28）：
+但两种角色的重定向目标不同（修订 28，修订 50 起浮窗已删，stdout 仅供崩溃回读）：
     - GUI 角色：无人读它的 stdout，扔 devnull 即可。
     - 语音角色：父进程（GUI voice_start）已把子进程 OS 层 fd 1/2 指向
-      logs/voxctl-voice.out，若这里再把 sys.stdout 换成 devnull，emit_state 的
-      状态协议行就进了黑洞、浮窗永远收不到状态。必须用 os.fdopen(1) 把 Python
-      stdout **接回**那个真实 fd，协议行才能落进文件供 GUI tailer 读。
+      logs/voxctl-voice.out，若这里再把 sys.stdout 换成 devnull，子进程崩溃
+      时的早期 traceback 就进了黑洞、GUI _read_voice_failure_reason 读不到
+      失败原因。必须用 os.fdopen(1) 把 Python stdout **接回**那个真实 fd，
+      崩溃日志才能落进文件供 GUI 回读。
 真实日志仍走 logs/ 文件，GUI 从文件回显。
 """
 
@@ -38,8 +39,8 @@ def _reopen_fd(fd: int):
 def _redirect_std(voice_role: bool) -> None:
     """frozen --windowed：sys.stdout/stderr 为 None 时按角色重定向。
 
-    voice_role=True：接回 fd 1/2（父进程已指向 voxctl-voice.out），让 emit_state
-      的协议行真正写进文件——这是浮窗能收到状态的前提。
+    voice_role=True：接回 fd 1/2（父进程已指向 voxctl-voice.out），让子进程崩溃
+      时的早期 traceback 写进文件——GUI _read_voice_failure_reason 才能回读原因。
     voice_role=False（GUI）：无人读，扔 devnull。
     """
     if sys.stdout is not None and sys.stderr is not None:

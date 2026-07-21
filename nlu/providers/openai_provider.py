@@ -46,7 +46,8 @@ class OpenAIClient(LLMClient):
         model: str,
         api_key: str,
         base_url: Optional[str] = None,
-        timeout: float = 15.0,
+        # CLAUDE.md §8.9：默认 30s（中转站比官方端点慢）；与 build_client 默认值保持一致
+        timeout: float = 30.0,
     ) -> None:
         # 延迟 import：只有真的实例化本 provider 才把 SDK 拉进内存。
         import openai

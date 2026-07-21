@@ -12,10 +12,11 @@ close_app：查白名单 → 二次确认 → psutil 找进程并 terminate。
     可能有未保存内容（notepad 有未保存文本，chrome 有未提交表单），
     保守策略实现简单且安全，误判代价（多问一句）远低于漏判代价（丢数据）。
 
-进程匹配：
-    白名单里存的是 exe 路径（如 chrome.exe 的完整路径），关闭时按 exe
-    文件名匹配进程（process.name() == "chrome.exe"）。chrome 等多进程
-    应用会关闭所有匹配进程。
+进程匹配（修订 47 §6）：
+    优先按完整路径匹配（proc.exe() resolve 后与白名单 app_path.resolve() 比对），
+    避免误杀同名不同路径进程（如 portable chrome + system chrome）。
+    proc.exe() 取不到（权限不足/进程已退出）或完整路径一个都没匹配到时，
+    降级到文件名匹配（覆盖 chrome 多进程主程序同名场景）。
 """
 
 from __future__ import annotations
@@ -155,17 +156,54 @@ class AppController:
         exe_filename = app_path.name  # e.g. "chrome.exe"
         terminated_pids: list[int] = []
         errors: list[str] = []
+        # 修订 48 S2：记录匹配来源，便于事后追查误杀是否走了降级路径
+        # "path" = 完整路径阶段命中；"name" = 降级文件名阶段命中；"none" = 无进程匹配
+        matched_via: str = "none"
 
-        for proc in psutil.process_iter(["pid", "name"]):
-            try:
-                proc_name = proc.info.get("name") or ""
-                if proc_name.lower() == exe_filename.lower():
-                    proc.terminate()  # 优雅关闭，发 SIGTERM
-                    terminated_pids.append(proc.info["pid"])
-            except (psutil.NoSuchProcess, psutil.AccessDenied) as exc:
-                # 进程已退出或权限不足，记录但继续
-                _LOG.debug("terminate pid=%s failed: %s", proc.info.get("pid"), exc)
-                errors.append(str(exc))
+        # 修订 47 §6：优先按完整路径匹配进程，避免误杀同名不同路径进程
+        # （如 portable chrome + system chrome）。proc.exe() 取不到或完整路径
+        # 一个都没匹配到时，降级到文件名匹配（覆盖 chrome 多进程主程序同名场景）。
+        try:
+            app_path_resolved = app_path.resolve()
+        except (OSError, RuntimeError):
+            app_path_resolved = None
+
+        if app_path_resolved is not None:
+            # 第一阶段：完整路径匹配
+            for proc in psutil.process_iter(["pid", "name"]):
+                try:
+                    try:
+                        proc_exe = proc.exe()  # 完整 exe 路径，可能抛 AccessDenied
+                    except (psutil.AccessDenied, psutil.NoSuchProcess):
+                        continue
+                    if not proc_exe:
+                        continue
+                    try:
+                        if Path(proc_exe).resolve() == app_path_resolved:
+                            proc.terminate()  # 优雅关闭，发 SIGTERM
+                            terminated_pids.append(proc.info["pid"])
+                    except (OSError, RuntimeError):
+                        pass
+                except (psutil.NoSuchProcess, psutil.AccessDenied) as exc:
+                    _LOG.debug("terminate pid=%s failed: %s", proc.info.get("pid"), exc)
+                    errors.append(str(exc))
+            if terminated_pids:
+                matched_via = "path"
+
+        # 第二阶段：完整路径未匹配到任何进程时，降级文件名匹配
+        # （proc.exe() 全部 AccessDenied，或 chrome 多进程主程序同名场景）
+        if not terminated_pids:
+            for proc in psutil.process_iter(["pid", "name"]):
+                try:
+                    proc_name = proc.info.get("name") or ""
+                    if proc_name.lower() == exe_filename.lower():
+                        proc.terminate()  # 优雅关闭，发 SIGTERM
+                        terminated_pids.append(proc.info["pid"])
+                except (psutil.NoSuchProcess, psutil.AccessDenied) as exc:
+                    _LOG.debug("terminate pid=%s failed: %s", proc.info.get("pid"), exc)
+                    errors.append(str(exc))
+            if terminated_pids:
+                matched_via = "name"
 
         if not terminated_pids:
             return ExecutionResult(
@@ -175,6 +213,7 @@ class AppController:
                     "app_name": app_name,
                     "app_path": str(app_path),
                     "terminated_pids": [],
+                    "matched_via": matched_via,  # "none"
                     "message": f"应用 {app_name!r} 当前未在运行",
                 },
             )
@@ -187,6 +226,7 @@ class AppController:
                 "app_path": str(app_path),
                 "terminated_pids": terminated_pids,
                 "terminated_count": len(terminated_pids),
+                "matched_via": matched_via,  # "path" 或 "name"
                 "errors": errors or None,
             },
         )

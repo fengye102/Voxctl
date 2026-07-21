@@ -222,20 +222,13 @@ Voxctl/
 │   ├── __init__.py
 │   └── edge_tts_engine.py     # Edge TTS 封装 + 流式播放管线 + pyttsx3 本地后备（修订 34）
 │
-├── ui/                         # 状态浮窗（光圈，修订 26）：屏幕底部居中实时状态反馈
+├── ui/                         # 全局热键监听（修订 33/50）：纯 ctypes，非 Windows no-op
 │   ├── __init__.py
-│   ├── state_protocol.py       # 语音→GUI 单向 stdout 行 JSON 协议：encode_state_event / parse_line（纯函数）
-│   ├── state_emitter.py        # 语音子进程端：emit_state(state, text) → print(json, flush)；含发送端节流；失败静默不崩主循环
-│   ├── state_tailer.py         # GUI 端后台线程：tail-follow logs/voxctl-voice.out → parse_line → evaluate_js 推浮窗（含文件不存在等待 + rotate 重打开）
-│   ├── overlay_window.py       # 建 pywebview 圆形浮窗（底部居中，SetWindowRgn 裁正圆）+ ctypes 补 WS_EX_NOACTIVATE 不抢焦点 + 点击桥 js_api（修订 33）
-│   ├── hotkey.py               # 全局键盘热键监听（修订 33）：Win32 RegisterHotKey + daemon 消息循环线程，toggle 语音；纯 ctypes，非 Windows no-op
-│   └── static/
-│       ├── overlay.html        # 浮窗前端（单文件，离线自足，CSS @keyframes 动画 + iOS 玻璃质感 + 点击 toggle handler）
-│       └── overlay-preview.html # 磁盘存在，用途未在本文档正式声明
+│   └── hotkey.py               # Win32 RegisterHotKey + daemon 消息循环线程，toggle 语音（修订 33，修订 50 起本目录只剩此文件）
 │
 ├── core/
 │   ├── __init__.py
-│   ├── event_loop.py           # 主循环：状态机分发 + 各 _phase_* 阶段处理 + 打断处理；各 _phase_* 入口挂 ui.state_emitter.emit_state 钩子（修订 26，不改 state.py）
+│   ├── event_loop.py           # 主循环：状态机分发 + 各 _phase_* 阶段处理 + 打断处理（不改 state.py）
 │   ├── factory.py              # MainLoop 构造工厂：create_from_config_file / create_from_config，从 config 实例化所有子模块（修订 35 从 event_loop.py 拆出）
 │   ├── interrupt_coordinator.py # 状态协调器：打断信号判定与分发
 │   ├── state.py                 # 全局状态机（空闲/监听/识别/执行/播报/等待确认）
@@ -246,12 +239,12 @@ Voxctl/
 │
 ├── webui/                      # 本地管理控制台（修订 24：只剩 PyWebView GUI 版，浏览器版已删）
 │   ├── __init__.py
-│   ├── gui.py                  # PyWebView 原生窗口 + js_api；含 ConsoleState / 别名读写 / validate_alias；run_gui() 起浮窗 + tailer + 热键（修订 26/33）
+│   ├── gui.py                  # PyWebView 原生窗口 + js_api；含 ConsoleState / 别名读写 / validate_alias；run_gui() 起热键监听（修订 26/33/50）
 │   └── static/
 │       └── index.html          # 控制台前端（单文件，无构建步骤，离线自足）
 │
 ├── build_voice.bat             # 语音主程序 exe 打包脚本（PyInstaller onedir → dist/voxctl/，修订 18）
-├── build_gui.bat               # GUI 控制台 exe 打包脚本（onedir --windowed，含 overlay.html 到 ui_static，修订 19/26）
+├── build_gui.bat               # GUI 控制台 exe 打包脚本（onedir --windowed，修订 19）
 │
 ├── user_apps.yaml              # webui 维护的用户别名表（机器写入，gitignore；启动时合并进 whitelist.apps，config.yaml 优先）
 ├── voxctl.local.yaml           # GUI 维护的本地覆盖：llm/asr/tts（机器写入，gitignore，含 api_key 明文，勿分享，修订 19/23）
@@ -271,7 +264,6 @@ Voxctl/
 │   │   ├── test_interrupt.py       # 打断功能（mock VAD/Player，12 用例）
 │   │   ├── test_stability.py       # 稳定性（复用 PureStateMachineLoop，30 轮 0 崩溃 + RSS 检查）
 │   │   ├── test_webui.py           # webui 纯函数（validate_alias / user_apps 合并优先级）
-│   │   ├── test_overlay.py         # 浮窗协议/emitter/tailer 纯逻辑（16 例）
 │   │   ├── test_hotkey.py          # 热键字符串解析纯函数
 │   │   ├── test_local_settings.py  # local_settings 读写/覆盖/keyring（37 例）
 │   │   ├── test_event_loop.py      # 真实 MainLoop 单元测试（41 例，含投机 ASR）
@@ -294,7 +286,7 @@ Voxctl/
     ├── actions.log              # 审计日志：执行动作 + 打断事件的 JSON lines（§6 强制）
     ├── voxctl.log               # 语音主程序运行日志（轮转，DEBUG）
     ├── voxctl-gui.log           # GUI 进程日志（windowed 无控制台，日志只进文件）
-    └── voxctl-voice.out         # 语音子进程 stdout/stderr 重定向 + 状态浮窗推送通道（@@VOXCTL_STATE@@ 行 JSON）
+    └── voxctl-voice.out         # 语音子进程 stdout/stderr 重定向（修订 50 起仅供 GUI _read_voice_failure_reason 回读崩溃原因）
 ```
 
 ### 命名与存放约定
@@ -336,9 +328,8 @@ tts:
   local_fallback: true             # pyttsx3 本地后备：edge-tts 网络异常时自动降级到 SAPI5（修订 34）
 
 ui:
-  status_overlay: true            # 状态浮窗（光圈）总开关，见第 8.11 节
   hotkey: "ctrl+alt+v"            # 全局热键 toggle 语音启停（修订 33）；GUI 可改，覆盖写 voxctl.local.yaml
-  hotkey_enabled: true            # 是否注册全局热键；false = 只保留点击光圈 toggle
+  hotkey_enabled: true            # 是否注册全局热键（修订 50 起浮窗已删，热键是唯一 toggle 入口之一，另入口是 GUI 控制台按钮）
 
 plugins:
   enabled: true                   # 插件机制总开关（修订 42）；false = 不扫描 plugins/，LLM schema 不含插件意图
@@ -464,7 +455,7 @@ whitelist:
 - **关闭应用、命令、文件路径仍 100% 白名单强制**：关闭 = 杀进程，可能丢未保存数据，不放开；`commands` / `paths` 是高危面，不放开。任何不在白名单内的这三类操作，一律拒绝执行，并 TTS 告知用户"这个操作不在允许范围内"，不做智能猜测或模糊匹配放行。
 - **GUI 控制台边界（修订 19）**：`webui/gui.py` 的 PyWebView 原生控制台**只暴露非破坏性操作**——改 LLM 配置（base_url / model / api_key，写 `voxctl.local.yaml`）、启停语音子进程、别名注册、解析测试、打开应用；**绝不**暴露关闭应用 / 删文件 / 跑命令（这三类仍只走语音 + 二次确认，边界同上条）。启停语音只是拉起 / 杀掉语音子进程，不是系统破坏性操作，不需二次确认。api_key 存 `voxctl.local.yaml` 明文（用户明确选择，§2 已记录放宽），语音仍经环境变量读取（`core/local_settings.py` 启动时注入），key **不进 `config.yaml`**；该本地文件随 exe 文件夹走，勿分享 / 传 git。
 - **启停必须给出失败反馈（修订 20）**：`Popen` 成功 ≠ 语音初始化成功——子进程可能在加载 vad/whisper 后因缺 key / 换错 base_url / 设备异常而崩溃退出，GUI **不得静默**把开关拨回"已停止"，须回读 `logs/voxctl.log` 尾部异常行把原因告知用户。落实为四道防线：启动前预检 key（本地文件或 env 都没有就直接拒绝，不白起必崩进程）、子进程 stdout/stderr 重定向到 `logs/voxctl-voice.out`（兜早期崩溃）、启动后短等探活（源码模式快速崩当场回读）、`voice_status` 轮询区分"用户主动停"与"意外崩溃"（frozen 导入慢崩在探活窗口之后的兜底）。
-- **点击光圈 / 全局热键 = 启停的等价触发（修订 33）**：点击状态浮窗、按全局键盘热键，都只是 GUI 启停语音子进程的**新触发方式**，走同一套 `toggle_voice`（内部复用修订 20 的启停逻辑与四道防线），不新增任何能力面——不暴露关闭应用 / 删文件 / 跑命令。因光圈太小放不下失败文字，点击/热键**启动失败**只做红闪 + 日志，详细原因仍需开 GUI 看（GUI 按钮路径的失败反馈不变）。热键用纯 ctypes `RegisterHotKey`，热键被占用要回报错误不静默。
+- **全局热键 = 启停的等价触发（修订 33，修订 50 起浮窗已删）**：按全局键盘热键只是 GUI 启停语音子进程的**新触发方式**，走同一套 `toggle_voice`（内部复用修订 20 的启停逻辑与四道防线），不新增任何能力面——不暴露关闭应用 / 删文件 / 跑命令。热键**启动失败**只写日志，详细原因仍需开 GUI 看（GUI 按钮路径的失败反馈不变）。热键用纯 ctypes `RegisterHotKey`，热键被占用要回报错误不静默。
 - **插件安全边界（修订 42，强制）**：插件可以注册新意图类型和 handler，但**不能扩展权限**：
   - 插件 handler 返回的 `ExecutionResult` 走与内置意图相同的 TTS 模板播报链路
   - 插件 handler **禁止直接调用 `subprocess`、`os.system`、`os.popen`**——这不是技术上做不到，而是规范约束；如果插件需要执行系统命令，必须通过 executor 暴露的受控接口（如调已注册的白名单命令），这些接口自身有白名单校验
@@ -590,36 +581,6 @@ whitelist:
   - **API key 仍只从环境变量读（§6 铁律，不因"独立分发"松动）**：拷到目标机后必须在目标机 `setx ANTHROPIC_API_KEY <key>` 设好，否则启动即报 key 缺失。绝不把 key 写进 config 明文。
   - **console 模式（非 windowed）**：语音助手要在窗口里显示识别文本/日志，保留控制台窗口，与原 PowerShell 运行体验一致。
 - **多 provider 的额外坑**：`nlu/providers/` 下两个 provider 文件只要都在代码里被 import（哪怕运行时只用一个），PyInstaller 静态分析就会把 `anthropic` 和 `openai` 两个 SDK 全部打进 exe，不会因为 `config.yaml` 里 `provider: anthropic` 就自动裁掉没用到的 `openai` 相关依赖。届时如果确定用户只会用固定的一种 provider，考虑在打包脚本层面用条件 import 或单独的打包配置排除掉另一个 SDK；如果两种都要保留给用户切换，接受体积代价即可，不用为了省这点体积牺牲切换灵活性。这个决策留到真正打包时再做，MVP 阶段不用管。
-
-### 8.11 状态浮窗（光圈）（修订 26）
-
-给用户一个屏幕级实时状态反馈——一枚浮在屏幕右下角的小圆点，跟随语音状态机变色/变动画，让用户在说话过程中直观感知"系统在运作"，不必盯日志。参考 Openless 的 Capsule 组件。
-
-- **形态**：80×80px 圆形，屏幕右下角（距右下边距各 20px），`frameless` + 置顶 + **不抢焦点**、可拖动。位置存 `localStorage`，重启保持。不做大于 120×120（迷你不挡视线）。
-- **状态→视觉映射**（前端 CSS class 切换）：
-
-  | Voxctl 状态 | 颜色 | 动画 | 最短显示 |
-  |---|---|---|---|
-  | IDLE | 灰 | 静止 | - |
-  | LISTEN | 红 | 脉冲呼吸 | - |
-  | ASR | 蓝 | 旋转环 | 200ms |
-  | EXECUTE | 紫 | 旋转环 | 200ms |
-  | TTS | 绿 | 波形 | - |
-  | AWAIT_CONFIRM | 黄 | 闪烁 | - |
-  | 错误 | 红 | 闪烁 | 500ms |
-
-- **状态推送协议（单向：语音子进程 → GUI，stdout 行 JSON）**：不开新端口 / 不用命名管道 / 不用 socket。**复用修订 20 已有的 `logs/voxctl-voice.out` 通道**——`webui/gui.py` 的 `voice_start` 早已把语音子进程 stdout/stderr 重定向到该文件（原为兜早期崩溃）。语音进程每次状态转换 `print(json.dumps(...), flush=True)` 写一行，GUI 侧后台线程 tail-follow 该文件、逐行解析、`evaluate_js` 推给浮窗。协议定义在 `ui/state_protocol.py`：每行一个 JSON 对象，必填 `event`（`"state"`/`"asr_text"`/`"tts_text"`/`"error"`/`"exit"`），`state` 事件 payload `{event:"state", state:"asr", ts:<float>, text?:<str>}`。`encode_state_event(state, text=None)->str` 编码、`parse_line(line)->dict|None`（非法 JSON/非状态行返回 None，容错，因为该文件也混着子进程别的 stdout）。**浮窗不显示敏感信息**（无 api_key / 无绝对路径）。
-- **不抢焦点的实现**：pywebview `frameless=True` + `easy_drag=True` **不足以**保证不抢焦点——Windows 上新窗口默认会 activate。用 `ctypes.windll.user32`（stdlib，不引新依赖）按窗口标题拿 HWND，`SetWindowLong` 追加 `WS_EX_NOACTIVATE | WS_EX_TOPMOST`。这样用户说话时焦点保留在原应用（记事本光标不丢）。
-- **节流**：同状态 200ms 内不重复推送；状态切换后最短显示 200ms（避免 ASR/EXECUTE 一闪而过看不清）。节流在发送端（`ui/state_emitter.py`）和前端各做一层。
-- **架构约束（不可违反）**：
-  - **不改 `core/state.py`**（State 枚举 / LoopState 不动）、**不改 `main.py` 主循环结构**、**不把推送塞进 `LoopState.transition()`**（保持状态机纯，副作用留在业务层）。
-  - 状态推送钩子只挂在 `core/event_loop.py` 各 `_phase_*` 方法入口这一个业务层，调 `ui/state_emitter.emit_state(state, text=None)`。emit 失败（stdout 挂了/BrokenPipe）静默吞掉，绝不能让语音主循环因为浮窗崩。
-  - 浮窗**默认纯展示、可选一个非破坏性交互（修订 33 松动）**：状态推送方向不变（仍单向 GUI←语音，浮窗不反向控制语音状态机）；但允许**点击光圈 toggle 语音子进程启停**——这是 §6/§19 早已许可的非破坏性生命周期操作（启停 = 拉起/杀掉语音子进程，非系统破坏、免二次确认），不碰关闭应用/删文件/跑命令边界。`config.yaml` 新增 `ui.status_overlay`（默认 `true`），关闭时 GUI 不起浮窗窗口/不起 tailer 线程，语音功能完全不受影响（emit 仍照写 stdout，无人读而已，无害）。
-  - **点击不抢焦点并存**：`WS_EX_NOACTIVATE` 只阻止「点击时把浮窗激活成前台」，鼠标消息照常投递给光标下窗口 → WebView2 收到 → JS `click` 触发。故「点击 toggle」与「说话时焦点留原应用」两约束**同时成立**，是本交互的前提（frozen 冒烟须验证点击后焦点不转移）。
-  - **全局键盘热键 toggle（修订 33）**：`ui/hotkey.py` 用 Win32 `RegisterHotKey(NULL,id,mods,vk)` + 独立 daemon 线程跑 `GetMessageW` 收 `WM_HOTKEY`，停止用 `PostThreadMessageW(WM_QUIT)`。**纯 ctypes（stdlib），不引新依赖、非 IPC/socket/管道**。热键字符串（如 `ctrl+alt+v`）存 `config.yaml` 的 `ui.hotkey`，GUI 可改并写入 `voxctl.local.yaml` 的 `ui` 块覆盖；热键被占用（RegisterHotKey 失败）要回报错误，不静默。非 Windows 整体 no-op。
-  - **启停失败反馈的尺寸取舍**：光圈太小无法显示失败原因文字——点击/热键启动失败时光圈**红闪 + 写日志**，详细原因（缺 key / base_url 错等）仍需开 GUI 看（修订 20 的失败反馈在 GUI 启停按钮路径上仍完整）；停止路径由 GUI 侧直接 `evaluate_js` 推 `exit` 事件把光圈归灰（语音停了不再产状态行）。
-- **模块落点**（新增 `ui/` 包，独立于既有模块）：`ui/state_protocol.py`（协议纯函数）、`ui/state_emitter.py`（语音端发送）、`ui/state_tailer.py`（GUI 端 tail 线程，含文件不存在等待 + rotate 重打开容错）、`ui/overlay_window.py`（建浮窗 + NOACTIVATE + 点击桥 js_api）、`ui/hotkey.py`（全局热键监听，修订 33，纯 ctypes）、`ui/static/overlay.html`（单文件前端，离线自足，无 CDN，同 `webui/static` 风格；含点击 toggle handler）。`webui/gui.py` 的 `run_gui()` 里按 `ui.status_overlay` 起浮窗 + tailer 线程 + 热键监听，浮窗 bridge 与热键共用同一个 toggle 闭包。
-- **打包**：`ui/static/overlay.html` 是 GUI 浮窗的资源，**`build_gui.bat` 必须 `--add-data ui\static\overlay.html;ui_static`**（GUI 是浮窗唯一消费者）。`build_voice.bat`（纯语音 exe，不显示浮窗）本可不加，但语音 exe 仍 import `ui.state_emitter` 发送状态，故给它加 `--hidden-import ui.state_emitter`；overlay.html 对 voice-only exe 无用，不必 add-data。（**方案原写"改 build_voice.bat 加 overlay 资源"是把消费者搞反了**——浮窗只在 GUI 角色显示，资源该进 `build_gui.bat`，见修订 26。）
 
 ---
 

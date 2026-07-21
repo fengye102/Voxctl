@@ -183,7 +183,12 @@ class AudioPlayer:
             except Exception:  # noqa: BLE001
                 pass
         # Also stop sd.play() streams (one-shot play via play())
-        sd.stop()
+        # sd.stop() 一般不抛，但 PortAudio 未初始化/设备异常时可能抛 PortAudioError；
+        # 打断路径绝不能再反噬主循环（§8.11 失败不崩主循环同样适用于此）
+        try:
+            sd.stop()
+        except Exception:  # noqa: BLE001
+            pass
         # Fire stop callbacks (e.g. pyttsx3 engine.stop())
         for cb in self._stop_callbacks:
             try:

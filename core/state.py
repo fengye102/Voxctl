@@ -26,7 +26,7 @@ from enum import Enum
 from typing import Optional
 
 from executor import ExecutionResult
-from nlu.schema import ParsedIntent
+from nlu.schema import AnyIntent
 
 
 class State(Enum):
@@ -45,8 +45,12 @@ class PendingConfirmation:
 
     AWAIT_CONFIRM 状态下，用户下一句话应该被解析为 ConfirmIntent / CancelIntent，
     主循环用这个上下文里的 intent + raw_text 以 confirmed=True 重新调 executor.execute。
+
+    修订 48 C2：intent 类型从 ParsedIntent 扩展为 AnyIntent——插件意图
+    (PluginIntent) 进 pending/二次确认路径时类型注解不再撒谎。仅类型注解扩展，
+    不动 state machine 定义（State 枚举 / LoopState 容器逻辑不变）。
     """
-    intent: ParsedIntent
+    intent: AnyIntent
     raw_text: str
     result: ExecutionResult  # 原始 needs_confirmation=True 的结果，用于播报确认提示
 
@@ -71,7 +75,7 @@ class LoopState:
         self.state = new_state
 
     def set_pending_confirmation(
-        self, intent: ParsedIntent, raw_text: str, result: ExecutionResult
+        self, intent: AnyIntent, raw_text: str, result: ExecutionResult
     ) -> None:
         self.pending = PendingConfirmation(
             intent=intent, raw_text=raw_text, result=result,

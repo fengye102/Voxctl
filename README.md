@@ -20,7 +20,7 @@
 |---|---|
 | [CLAUDE.md](CLAUDE.md) | **项目唯一事实来源**。架构图、技术栈、MVP 范围、分步开发计划、安全规则、Windows 踩坑、33 条变更记录。改架构先改这里再改代码。 |
 | [README.md](README.md) | 本文件。全项目文件地图。 |
-| [config.yaml](config.yaml) | **主配置**（用户可改，含手写注释）。audio / vad / asr / llm / tts / ui / whitelist 全部字段。白名单三类（apps 别名、commands 命令、paths 路径）+ 打断阈值调优指南都在这里。`ui` 块控制状态浮窗开关（`status_overlay`）和全局热键（`hotkey` / `hotkey_enabled`）。禁止在代码里硬编码这些值。 |
+| [config.yaml](config.yaml) | **主配置**（用户可改，含手写注释）。audio / vad / asr / llm / tts / ui / whitelist 全部字段。白名单三类（apps 别名、commands 命令、paths 路径）+ 打断阈值调优指南都在这里。`ui` 块控制全局热键（`hotkey` / `hotkey_enabled`）。禁止在代码里硬编码这些值。 |
 | [voxctl.local.yaml](voxctl.local.yaml) | GUI 控制台维护的**本地覆盖**（机器写入，gitignore）。覆盖 config 的 llm/asr/tts 三块，**含 api_key 明文**。⚠ 随 exe 文件夹走，**勿分享 / 勿传 git**。 |
 | [user_apps.yaml](user_apps.yaml) | GUI 维护的**用户别名表**（应用名→exe/.lnk 路径，机器写入，gitignore）。启动时合并进 `whitelist.apps`，config.yaml 同名优先。独立成文件是为了不破坏 config.yaml 的注释。（当前工作区可能尚未生成。） |
 | [requirements.txt](requirements.txt) | 依赖清单（宽松基线版本）。pydantic/anthropic/openai/numpy/sounddevice/onnxruntime/faster-whisper/opencc/psutil/edge-tts/av(PyAV)/PyYAML/pywebview。注明修订 21 起用 onnxruntime 跑 VAD、去掉 torch。 |
@@ -30,11 +30,11 @@
 
 | 文件 | 作用 |
 |---|---|
-| [app.py](app.py) | **统一入口**（修订 19）。默认 `python app.py` 起 PyWebView GUI 控制台；`python app.py --voice` 委托 `main.main()` 跑语音。单 exe 靠 `--voice` 参数复用两种角色。含 frozen 下 stdout 重定向（修订 28：语音角色接回 fd1 保证状态协议行落进 voxctl-voice.out，GUI 角色扔 devnull）、chdir 到 exe 目录。 |
+| [app.py](app.py) | **统一入口**（修订 19）。默认 `python app.py` 起 PyWebView GUI 控制台；`python app.py --voice` 委托 `main.main()` 跑语音。单 exe 靠 `--voice` 参数复用两种角色。含 frozen 下 stdout 重定向（修订 28：语音角色接回 fd1 让崩溃 traceback 落进 voxctl-voice.out 供 GUI 回读，GUI 角色扔 devnull）、chdir 到 exe 目录。 |
 | [main.py](main.py) | **语音主循环入口**。日志配置调 `core/logger.py` 的 `configure_root_logging()`（修订 25：控制台 INFO + 轮转文件 DEBUG，UTF-8，windowed 下跳过控制台 handler）、frozen chdir、`--config` 参数、构造 `MainLoop.from_config_file()` 跑 `asyncio.run`、捕获 Ctrl+C。 |
 | [run.bat](run.bat) | 一键启动语音主程序：设 UTF-8 代码页 → 激活 venv → `python main.py`。日常开发用，用户双击即可。 |
 | [build_voice.bat](build_voice.bat) | 语音主程序 exe 打包脚本（PyInstaller onedir → `dist/voxctl/`，console 模式）。显式 collect ctranslate2/faster_whisper/onnxruntime/opencc/sounddevice/anthropic/openai，exclude torch，`--add-data` 打包 silero_vad.onnx。 |
-| [build_gui.bat](build_gui.bat) | GUI 控制台 exe 打包脚本（onedir `--windowed` 无黑窗）。在 build_voice 基础上加 PyWebView 原生栈（webview/clr_loader/pythonnet/bottle）+ `--hidden-import main`（供 `--voice` 子进程角色）+ 打包 index.html 到 `webui_static` + overlay.html 到 `ui_static`（浮窗资源）。约 271MB。 |
+| [build_gui.bat](build_gui.bat) | GUI 控制台 exe 打包脚本（onedir `--windowed` 无黑窗）。在 build_voice 基础上加 PyWebView 原生栈（webview/clr_loader/pythonnet/bottle）+ `--hidden-import main`（供 `--voice` 子进程角色）+ 打包 index.html 到 `webui_static`。约 271MB。 |
 | [tests/acceptance/test_gui_smoke.py](tests/acceptance/test_gui_smoke.py) | 源码模式 GUI 窗口**冒烟测试**（修订 19）。开 pywebview 窗口→探测 js_api 桥→检查 11 个方法存在→自动关闭。非交互。 |
 
 ---
@@ -111,19 +111,14 @@
 
 ---
 
-## ui/ — 状态浮窗（光圈）+ 全局热键
+## ui/ — 全局热键
 
-屏幕底部居中的 80×80 小圆点，跟随语音状态机变色/变动画（IDLE 灰→LISTEN 红脉冲→ASR 六彩点→EXECUTE 紫环→TTS 绿波→AWAIT_CONFIRM 黄闪），给用户实时视觉反馈。可点击 toggle 语音启停，支持全局键盘热键。
+全局键盘热键 toggle 语音子进程启停（非破坏性生命周期操作，免二次确认）。修订 50 起浮窗已删，本目录只剩热键监听。
 
 | 文件 | 作用 |
 |---|---|
 | [ui/__init__.py](ui/__init__.py) | 包标记。 |
-| [ui/state_protocol.py](ui/state_protocol.py) | **单向推送协议**（语音→GUI，stdout 行 JSON）。`encode_state_event(state, text)` 编码、`parse_line(line)` 解码（任何脏输入不抛异常返回 None）。事件类型：`state`/`asr_text`/`tts_text`/`error`/`exit`。纯函数，无副作用。 |
-| [ui/state_emitter.py](ui/state_emitter.py) | **语音端发送**。`emit_state(state, text)` → `print(json, flush=True)` 写一行。`VOXCTL_OVERLAY` 环境变量作闸门（GUI 设为 `1` 时才产协议行，独立 run.bat 不污染控制台）。同状态 200ms 内不重复推送。失败静默不崩主循环。 |
-| [ui/state_tailer.py](ui/state_tailer.py) | **GUI 端 tail 线程**。tail-follow `logs/voxctl-voice.out` → `parse_line` → `evaluate_js` 推浮窗。含文件不存在等待、rotate 重打开容错、首次跳历史。 |
-| [ui/overlay_window.py](ui/overlay_window.py) | **浮窗窗口**。pywebview frameless 置顶 + `SetWindowRgn` 居中正圆裁剪（解决 WinForms 最小宽撑非方窗的问题）+ ctypes `WS_EX_NOACTIVATE` 不抢焦点（说话时焦点留原应用）。固定屏幕底部居中（`_BOTTOM_GAP=140`）。支持传 `js_api` 桥实现点击 toggle。 |
 | [ui/hotkey.py](ui/hotkey.py) | **全局键盘热键**（修订 33）。Win32 `RegisterHotKey` + daemon 消息循环线程，toggle 语音启停。纯 ctypes，不引新依赖。热键被占用回报错误不静默。非 Windows no-op。 |
-| [ui/static/overlay.html](ui/static/overlay.html) | **浮窗前端**（单文件，离线自足，无 CDN）。CSS @keyframes 动画（脉冲/六彩点旋转/环/波/闪烁）+ iOS Siri 哑光玻璃质感（次表面散射多层渐变 + SVG feTurbulence 噪点 + 边缘羽化）。点击 → `pywebview.api.toggle()`。 |
 
 ---
 
@@ -132,7 +127,7 @@
 | 文件 | 作用 |
 |---|---|
 | [webui/__init__.py](webui/__init__.py) | 包标记（一行 docstring）。 |
-| [webui/gui.py](webui/gui.py) | **GUI 控制台主体**（修订 19/24/33）。PyWebView 原生窗口 + `Api` js_api 桥（11+ 个方法）：别名增删/解析/打开、审计日志、LLM/ASR/TTS 设置读写、语音子进程启停、热键设置。修订 24 把已删的 server.py 共享底层（`ConsoleState`/别名读写/`validate_alias`/frozen 路径解析）内联进来。`run_gui()` 按 `ui.status_overlay` 起浮窗 + tailer 线程 + 热键监听，浮窗桥与热键共用同一个 toggle 闭包。**只暴露非破坏性操作**；语音启停含四道失败反馈防线（修订 20：预检 key、重定向 stderr、探活、崩溃回读）。 |
+| [webui/gui.py](webui/gui.py) | **GUI 控制台主体**（修订 19/24/33）。PyWebView 原生窗口 + `Api` js_api 桥（11+ 个方法）：别名增删/解析/打开、审计日志、LLM/ASR/TTS 设置读写、语音子进程启停、热键设置。修订 24 把已删的 server.py 共享底层（`ConsoleState`/别名读写/`validate_alias`/frozen 路径解析）内联进来。`run_gui()` 起全局热键监听（修订 33，修订 50 起浮窗已删）。**只暴露非破坏性操作**；语音启停含四道失败反馈防线（修订 20：预检 key、重定向 stderr、探活、崩溃回读）。 |
 | [webui/static/index.html](webui/static/index.html) | **控制台前端**（单文件，无构建步骤）。修订 22 亮色毛玻璃视觉，**离线自足**（无 CDN/webfont/图片，纯 CSS 渐变）。左侧导航（语音控制/大模型配置/应用别名/审计日志）+ 右侧卡片。经 `window.pywebview.api.*` 调后端。 |
 
 ---
@@ -149,7 +144,6 @@
 | [test_interrupt.py](tests/unit/test_interrupt.py) | 打断功能（mock VAD/Player，12 用例含 monitor 检测/打断取消 pending/exit 时序）。 |
 | [test_stability.py](tests/unit/test_stability.py) | 稳定性（复用 PureStateMachineLoop，30 轮 0 崩溃 + RSS 增长检查 + 状态收敛）。 |
 | [test_webui.py](tests/unit/test_webui.py) | webui 纯函数（validate_alias / user_apps 合并优先级，修订 24 import 改自 webui.gui）。 |
-| [test_overlay.py](tests/unit/test_overlay.py) | 浮窗协议/emitter/tailer 纯逻辑（16 例，修订 26）。 |
 | [test_hotkey.py](tests/unit/test_hotkey.py) | 热键字符串解析纯函数（修订 33）。 |
 
 ### acceptance/ — 验收脚本（需真实设备/网络，手动运行）
@@ -179,7 +173,7 @@
 | [logs/actions.log](logs/actions.log) | **审计日志**（§6 强制）。每次执行动作 + 打断事件的 JSON lines 记录（时间戳、原始文本、意图、操作、结果、打断详情）。排查误触发的唯一依据。 |
 | [logs/voxctl.log](logs/voxctl.log) | 语音主程序运行日志（轮转，DEBUG）。 |
 | [logs/voxctl-gui.log](logs/voxctl-gui.log) | GUI 进程日志（windowed 无控制台，日志只能进文件）。 |
-| [logs/voxctl-voice.out](logs/voxctl-voice.out) | GUI 拉起的语音子进程 stdout/stderr 重定向（修订 20：兜早期崩溃）。同时是状态浮窗的推送通道——语音进程写 `@@VOXCTL_STATE@@` 行 JSON，GUI tailer 线程 tail-follow 此文件推浮窗。 |
+| [logs/voxctl-voice.out](logs/voxctl-voice.out) | GUI 拉起的语音子进程 stdout/stderr 重定向（修订 20：兜早期崩溃）。修订 50 起浮窗已删，此文件仅供 GUI `_read_voice_failure_reason` 回读子进程崩溃时的早期 traceback。 |
 
 ---
 

@@ -2,7 +2,7 @@
 
 只测能脱离 Win32 独立验证的纯逻辑：热键字符串解析（parse_hotkey）。
 不测 HotkeyListener 的 RegisterHotKey / 消息循环——那需要真 Windows 消息队列 +
-被占用/未占用的实际热键，属 frozen 冒烟范畴（同 overlay_window 的定位）。
+被占用/未占用的实际热键，属 frozen 冒烟范畴。
 """
 
 from __future__ import annotations

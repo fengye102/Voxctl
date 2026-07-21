@@ -6,12 +6,16 @@
     3. dangerous: true 的命令必须二次确认（confirmed=True 才执行）
     4. 超时保护：单条命令最长 30 秒，防止挂死主循环
 
-args 安全说明：
+args 安全说明（修订 47 §6）：
     RunCommandIntent.args 会追加到白名单 command 列表末尾传给 subprocess。
     因为 shell=False，args 不会被 shell 解释（&、|、; 等是字面参数）。
     但对于 powershell -Command "xxx" 类白名单条目，args 追加后会被
-    powershell 自身解释——这是白名单配置者的责任，配置 dangerous 命令
-    时需评估 args 注入风险。
+    powershell 自身解释——这是白名单配置者的责任。
+
+    CommandEntry.allow_args 控制 args 是否允许：
+    - false（默认）：intent.args 非空 → 直接拒绝执行
+    - true：允许 args 追加（配置者自行评估注入风险）
+    - dangerous: true 的命令强制 allow_args=false（Whitelist.from_config 覆盖）
 """
 
 from __future__ import annotations
@@ -65,6 +69,21 @@ class ShellRunner:
                     "command": entry.command,
                 },
                 error=None,  # needs_confirmation 不是错误，是待确认状态
+            )
+
+        # 修订 47 §6：allow_args=false 时拒绝带 args 调用。
+        # dangerous 命令在 Whitelist.from_config 已强制 allow_args=false，
+        # 这里对非 dangerous 但未显式 allow_args=true 的命令同样拦截。
+        if not entry.allow_args and intent.args:
+            return ExecutionResult(
+                success=False,
+                action_type="run_command",
+                error="该命令不支持参数",
+                payload={
+                    "command_name": command_name,
+                    "command": entry.command,
+                    "rejected_args": list(intent.args),
+                },
             )
 
         # 构造最终命令：白名单 command + 用户 args

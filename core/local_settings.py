@@ -1,17 +1,17 @@
 """voxctl.local.yaml：GUI 控制台维护的本地覆盖（CLAUDE.md 修订 19 / 23）。
 
 定位：GUI 控制台在这里存用户改的配置，独立于 config.yaml——后者满是手写注释，
-机器写入会毁注释（同 user_apps.yaml 分家逻辑，§16）。覆盖三块（修订 23 从"仅 llm"扩展）：
+机器写入会毁注释（同 user_apps.yaml 分家逻辑，§16）。覆盖三块（修订 23 扩到 asr/tts，修订 46 加云端音频字段）：
     - llm.{provider, model, base_url}
-    - asr.model_size
-    - tts.voice
+    - asr.{model_size, provider, model, base_url}（model_size=本地，其余=云端 OpenAI，修订 46）
+    - tts.{voice, provider, tts_voice, model, base_url}（voice=本地 edge，其余=云端 OpenAI，修订 46）
 
 流转（§2 / §6 修订 19 放宽）：
-    - provider / model / base_url / asr.model_size / tts.voice：
-      apply_local_overrides() 叠到 config 对应块上
+    - 上述非敏感字段：apply_local_overrides() 叠到 config 对应块上
     - api_key：存 OS keyring（service="voxctl", username=api_key_env），启动时注入到
-      环境变量 config['llm']['api_key_env']，intent_parser 读取路径不变（仍从 env var 读），
-      key 不进 config.yaml。keyring 不可用时 fallback 到 yaml 旧值（迁移兼容）。
+      环境变量——llm / asr / tts 三块各自 api_key_env 去重后逐个注入（修订 46，云端音频
+      的 OPENAI_API_KEY 也经此到达语音子进程）；读取路径不变（仍从 env var 读），key 不进
+      config.yaml。keyring 不可用时 fallback 到 yaml 旧值（迁移兼容）。
     - 语音子进程无论由 GUI 拉起还是 run.bat 独立启动，都经 from_config_file →
       apply_local_overrides 自己从本文件读并叠加，所以 GUI 启停语音只需普通 Popen
 
@@ -46,8 +46,10 @@ KEYRING_SERVICE = "voxctl"
 
 # 各块可直接覆盖进 config 的非敏感字段；api_key 走 keyring，不入 config / 不入 yaml
 _LLM_OVERRIDE_FIELDS = ("provider", "model", "base_url")
-_ASR_OVERRIDE_FIELDS = ("model_size",)
-_TTS_OVERRIDE_FIELDS = ("voice",)
+# asr 本地字段 model_size + 云端字段 provider/model/base_url（修订 46）；两组互不干扰，各服务一种 provider
+_ASR_OVERRIDE_FIELDS = ("model_size", "provider", "model", "base_url")
+# tts 本地字段 voice + 云端字段 provider/tts_voice/model/base_url（修订 46）；云端音色用 tts_voice 与本地 voice 分开
+_TTS_OVERRIDE_FIELDS = ("voice", "provider", "tts_voice", "model", "base_url")
 
 
 def _resolve(path: Union[str, Path, None]) -> Path:
@@ -205,21 +207,21 @@ def apply_local_overrides(
     config: dict,
     path: Union[str, Path, None] = None,
 ) -> dict:
-    """把 voxctl.local.yaml 的覆盖叠到 config（llm/asr/tts 三块），api_key 从 keyring 注入环境变量（修订 23）。
+    """把 voxctl.local.yaml 的覆盖叠到 config（llm/asr/tts 三块），api_key 从 keyring 注入环境变量（修订 23 / 46）。
 
     - llm.{provider, model, base_url}：本地文件里非空则覆盖 config['llm'] 对应字段
-    - api_key：先查 OS keyring，再 fallback 到 yaml 旧值（迁移兼容）；
-      非空则 os.environ[api_key_env] = key（**覆盖**已有 env）
-      —— 语义是"GUI 改的 key 说了算"：用户在 GUI 里改了 key 就该生效，即便系统里
-      还留着旧的环境变量。intent_parser 读取路径不变（仍读 env var），key 不进 config。
-      keyring 和 yaml 都无 api_key 时不动 os.environ（用户仍可纯用系统环境变量，见 §2）。
-    - asr.model_size / tts.voice：本地文件里非空则覆盖 config 对应块字段（修订 23）
+    - asr/tts：本地文件里非空则覆盖对应块字段（本地 + 云端字段并存，修订 46）
+    - api_key：对 llm / asr / tts 三块各自 `api_key_env` 去重后逐个注入（修订 46）——
+      先查 OS keyring，再 fallback 到 yaml 旧值（迁移兼容）；非空则
+      os.environ[api_key_env] = key（**覆盖**已有 env）。语义是"GUI 改的 key 说了算"。
+      云端 ASR/TTS 的 OPENAI_API_KEY 也经此注入，否则云端引擎构造即因缺 key 抛异常。
+      intent_parser / 云端引擎读取路径不变（仍读 env var），key 不进 config。
 
     config 原地修改并返回。无本地文件 / 无覆盖时是 no-op。
     """
     data = load_local_settings(path)
 
-    # --- llm 块（含 api_key 注入 env）---
+    # --- llm 块（纯字段覆盖）---
     llm_local = data.get("llm") if isinstance(data.get("llm"), dict) else {}
     llm_cfg = config.setdefault("llm", {})
     if llm_local:
@@ -229,20 +231,27 @@ def apply_local_overrides(
                 llm_cfg[field] = val
                 _LOG.info("local override applied: llm.%s", field)
 
-    # api_key: keyring first, then yaml fallback
-    env_name = str(llm_cfg.get("api_key_env", "ANTHROPIC_API_KEY"))
-    api_key = load_api_key(env_name, path)
-    if api_key:
-        os.environ[env_name] = api_key
-        _LOG.info(
-            "local override applied: injected api_key into env %s (len=%d, source=%s)",
-            env_name, len(api_key),
-            "keyring" if (_keyring is not None and _keyring.get_password(KEYRING_SERVICE, env_name)) else "yaml_fallback",
-        )
-
-    # --- asr / tts 块（纯字段覆盖，修订 23）---
+    # --- asr / tts 块（本地 + 云端字段覆盖，修订 46）---
     _apply_section(config, "asr", data.get("asr"), _ASR_OVERRIDE_FIELDS)
     _apply_section(config, "tts", data.get("tts"), _TTS_OVERRIDE_FIELDS)
+
+    # --- api_key 注入（llm / asr / tts 各自 api_key_env，去重，修订 46）---
+    # api_key_env 保留在 config.yaml（非覆盖字段），三块可能指向不同变量名（如 llm 用
+    # ANTHROPIC_API_KEY、云端音频用 OPENAI_API_KEY），也可能相同——去重后逐个注入。
+    seen_envs: set = set()
+    for section in ("llm", "asr", "tts"):
+        env_name = str(config.get(section, {}).get("api_key_env", "") or "").strip()
+        if not env_name or env_name in seen_envs:
+            continue
+        seen_envs.add(env_name)
+        api_key = load_api_key(env_name, path)
+        if api_key:
+            os.environ[env_name] = api_key
+            _LOG.info(
+                "local override applied: injected api_key into env %s (len=%d, source=%s)",
+                env_name, len(api_key),
+                "keyring" if (_keyring is not None and _keyring.get_password(KEYRING_SERVICE, env_name)) else "yaml_fallback",
+            )
 
     return config
 

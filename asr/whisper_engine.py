@@ -30,58 +30,28 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass, field
 
 import numpy as np
 
+# 抽象层迁移（修订 45）：ASRResult / 异常层级 / 阈值常量迁到 asr.asr_engine，
+# 这里 re-export 保持 `from asr.whisper_engine import ASRResult, ASRError` 等旧路径可用。
+from asr.asr_engine import (
+    ASREngine,
+    ASRError,
+    ASRResult,
+    ModelLoadError,
+    TranscribeError,
+    _DEFAULT_LOG_PROB_THRESHOLD,
+    _DEFAULT_NO_SPEECH_THRESHOLD,
+    apply_opencc,
+    finalize_result,
+    load_opencc_converter,
+)
+
 _LOG = logging.getLogger(__name__)
 
-# 置信度过滤阈值（以下为经验默认值，可通过 config 覆盖）
-_DEFAULT_NO_SPEECH_THRESHOLD = 0.6   # no_speech_prob > 此值 → 视为无人声/噪声
-_DEFAULT_LOG_PROB_THRESHOLD = -1.0   # avg_logprob < 此值 → 转录质量太差，丢弃
 
-
-class ASRError(Exception):
-    """ASR 模块错误基类。"""
-
-
-class ModelLoadError(ASRError):
-    """模型加载失败（网络问题、磁盘空间不足等）。"""
-
-
-class TranscribeError(ASRError):
-    """转录执行阶段的错误。"""
-
-
-@dataclass
-class ASRResult:
-    """转录结果。
-
-    Attributes:
-        text:            识别出的文本（空字符串表示静音/噪声/置信度不足）。
-        is_empty:        True 表示没有有效语音内容（静音、噪声、置信度过滤）。
-        no_speech_prob:  Whisper 认为这段音频不含人声的概率（0–1）。
-        avg_logprob:     所有 token 的平均对数概率（越接近 0 越好，< -1 通常质量差）。
-        duration_s:      音频时长（秒）。
-        elapsed_s:       转录耗时（秒），用于性能监控。
-        segments:        各 segment 的原始文本列表（调试用）。
-    """
-    text: str
-    is_empty: bool
-    no_speech_prob: float = 0.0
-    avg_logprob: float = 0.0
-    duration_s: float = 0.0
-    elapsed_s: float = 0.0
-    segments: list[str] = field(default_factory=list)
-
-    @classmethod
-    def empty(cls, reason: str = "", **kwargs) -> "ASRResult":
-        """构造一个空结果（静音/噪声/过滤）。"""
-        _LOG.debug("ASR empty result: %s", reason)
-        return cls(text="", is_empty=True, **kwargs)
-
-
-class WhisperEngine:
+class WhisperEngine(ASREngine):
     """faster-whisper ASR 引擎。
 
     单实例，进程内复用。模型在首次调用 transcribe() 时加载，之后常驻内存。
@@ -207,11 +177,8 @@ class WhisperEngine:
         avg_logprob = (logprob_sum / logprob_count) if logprob_count > 0 else 0.0
 
         # 繁→简转换（CLAUDE.md §2 ASR 补充：Whisper 中文模型对大陆普通话有时输出繁体字符）
-        if self._opencc_enabled and self._converter is not None and full_text:
-            converted = self._converter.convert(full_text)
-            if converted != full_text:
-                _LOG.debug("opencc t2s: %r -> %r", full_text, converted)
-            full_text = converted
+        if self._opencc_enabled:
+            full_text = apply_opencc(full_text, self._converter)
 
         _LOG.debug(
             "ASR raw: text=%r no_speech_prob=%.3f avg_logprob=%.3f elapsed=%.2fs",
@@ -311,22 +278,6 @@ class WhisperEngine:
         _LOG.info("faster-whisper model loaded in %.1fs", elapsed)
 
     def _ensure_converter_loaded(self) -> None:
-        """加载 opencc 繁简转换器（t2s 模式：繁体→简体，字符级映射）。
-
-        选 t2s 而不是 tw2sp 的原因：
-          - 用户说大陆普通话，Whisper 输出的繁体是字符变体（開/来/览），不是台湾词汇
-          - tw2sp 做词组级替换会把「退出程序」变成「退出进程」，语义错误
-          - t2s 只做字符 1:1 映射，对大陆词汇零副作用
-        opencc 未安装时静默降级（不阻断程序启动），日志警告提示。
-        """
-        try:
-            import opencc
-            self._converter = opencc.OpenCC("t2s")
-            _LOG.debug("opencc t2s converter loaded")
-        except ImportError:
-            _LOG.warning(
-                "opencc-python-reimplemented 未安装，繁简转换已禁用；"
-                "如遇繁体输出请运行：pip install opencc-python-reimplemented"
-            )
-            self._converter = None
+        """加载 opencc 繁简转换器（t2s 模式：繁体→简体，字符级映射）。见 asr.asr_engine。"""
+        self._converter = load_opencc_converter(self._opencc_enabled)
 

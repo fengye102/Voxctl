@@ -110,7 +110,8 @@ def build_client(
     model: str,
     api_key: str,
     base_url: Optional[str] = None,
-    timeout: float = 15.0,
+    # CLAUDE.md §8.9：中转站比官方端点慢，默认 30s；config.yaml 显式 timeout 同样默认 30
+    timeout: float = 30.0,
 ) -> LLMClient:
     """按 provider 字段实例化对应的 LLMClient。
 

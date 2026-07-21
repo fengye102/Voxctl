@@ -124,6 +124,13 @@ ParsedIntent = Annotated[
     Field(discriminator="intent"),
 ]
 
+# AnyIntent（修订 47 C2）：ParsedIntent + PluginIntent 的联合，用于 parse() 返回类型注解。
+# PluginIntent 的 intent 字段是动态的（插件 intent_name），不能放进带 discriminator
+# 的 ParsedIntent 联合；intent_parser.parse() 在 validate_intent 前拦截插件意图名
+# 构造 PluginIntent，不走 _ADAPTER 校验。原 parse() -> ParsedIntent 注解与实际行为
+# 矛盾（可能返回 PluginIntent），此别名让类型注解诚实。
+AnyIntent = Union[ParsedIntent, PluginIntent]
+
 _ADAPTER: TypeAdapter[ParsedIntent] = TypeAdapter(ParsedIntent)
 
 

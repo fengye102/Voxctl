@@ -29,6 +29,7 @@ from nlu.llm_client import (
     build_client,
 )
 from nlu.schema import (
+    AnyIntent,
     ParsedIntent,
     PluginIntent,
     UnknownIntent,
@@ -76,7 +77,8 @@ class LLMConfig:
     model: str
     api_key_env: str
     base_url: Optional[str] = None
-    timeout: float = 15.0
+    # CLAUDE.md §8.9：默认 30s（中转站比官方端点慢）；config.yaml 缺字段时也用 30s
+    timeout: float = 30.0
 
     @classmethod
     def from_dict(cls, raw: dict) -> "LLMConfig":
@@ -86,7 +88,7 @@ class LLMConfig:
             model=raw["model"],
             api_key_env=raw["api_key_env"],
             base_url=(raw.get("base_url") or None),
-            timeout=float(raw.get("timeout", 15.0)),
+            timeout=float(raw.get("timeout", 30.0)),
         )
 
 
@@ -136,7 +138,7 @@ class IntentParser:
         return cls(client, plugin_tool_specs, plugin_intent_names)
 
     # ------------------------------------------------------------------
-    def parse(self, text: str) -> ParsedIntent:
+    def parse(self, text: str) -> AnyIntent:
         """解析用户文本为具体意图模型。
 
         对空输入直接返回 unknown，不去打 LLM——ASR 转出空文本是常见情况

@@ -49,6 +49,7 @@ from core.local_settings import (
     _TTS_OVERRIDE_FIELDS,
     effective_llm_settings,
     effective_section_settings,
+    load_api_key,
     load_local_section,
     save_api_key,
     save_local_settings,
@@ -62,12 +63,6 @@ _AUDIT_LOG = _PROJECT_ROOT / "logs" / "actions.log"
 _INDEX_HTML = _STATIC_DIR / "index.html"
 _CONFIG_PATH = _PROJECT_ROOT / "config.yaml"
 
-# 状态浮窗静态资源（修订 26 / §8.11）：frozen 时 build_gui.bat 用 --add-data ...;ui_static
-# 解包到 _MEIPASS/ui_static，源码时在 ui/static。浮窗只在 GUI 角色渲染（消费者是 GUI）。
-if getattr(sys, "frozen", False):
-    _OVERLAY_HTML = Path(getattr(sys, "_MEIPASS", ".")) / "ui_static" / "overlay.html"
-else:
-    _OVERLAY_HTML = _PROJECT_ROOT / "ui" / "static" / "overlay.html"
 
 # 别名路径只允许这两类目标：可执行文件和快捷方式
 _ALLOWED_SUFFIXES = {".exe", ".lnk"}
@@ -201,14 +196,6 @@ def _load_config_llm() -> dict:
     return _load_config_section("llm")
 
 
-def _overlay_enabled() -> bool:
-    """读 config.yaml 的 ui.status_overlay（修订 26）。缺省 True。失败按 True 处理。"""
-    try:
-        blk = _load_config_section("ui")
-        val = blk.get("status_overlay", True)
-        return bool(val)
-    except Exception:  # noqa: BLE001
-        return True
 
 
 # 全局热键默认值（修订 33）：config.yaml ui 块缺字段时兜底
@@ -343,14 +330,17 @@ class Api:
         )
         return {"ok": result.success, "error": result.error, "payload": result.payload}
 
-    # ---- 设置（LLM + ASR + TTS，写 voxctl.local.yaml，修订 19 / 23）--------
+    # ---- 设置（LLM + ASR + TTS，写 voxctl.local.yaml，修订 19 / 23 / 46）--------
     def get_settings(self) -> dict:
         eff = effective_llm_settings(_load_config_llm())
-        asr = effective_section_settings(
-            _load_config_section("asr"), "asr", _ASR_OVERRIDE_FIELDS)
-        tts = effective_section_settings(
-            _load_config_section("tts"), "tts", _TTS_OVERRIDE_FIELDS)
+        asr_cfg = _load_config_section("asr")
+        tts_cfg = _load_config_section("tts")
+        asr = effective_section_settings(asr_cfg, "asr", _ASR_OVERRIDE_FIELDS)
+        tts = effective_section_settings(tts_cfg, "tts", _TTS_OVERRIDE_FIELDS)
         hk = _effective_hotkey()
+        # 云端音频各自 api_key_env（config.yaml 里，非覆盖字段）；判断 keyring 是否已存 key
+        asr_key_env = str(asr_cfg.get("api_key_env", "OPENAI_API_KEY"))
+        tts_key_env = str(tts_cfg.get("api_key_env", "OPENAI_API_KEY"))
         # 不回传 api_key 明文；前端密码框始终留空，靠 has_local_key 提示"已设置"
         return {
             "provider": eff["provider"],
@@ -359,10 +349,22 @@ class Api:
             "api_key_env": eff["api_key_env"],
             "has_local_key": eff["has_local_key"],
             "overridden": eff["overridden"],
-            # ASR / TTS 生效值 + 各自覆盖标记（修订 23）
+            # ASR 生效值：本地 model_size + 云端 provider/model/base_url（修订 46）
             "asr_model": asr["model_size"],
+            "asr_provider": asr["provider"] or "local",
+            "asr_cloud_model": asr["model"],
+            "asr_base_url": asr["base_url"],
+            "asr_key_env": asr_key_env,
+            "asr_has_key": bool(load_api_key(asr_key_env)),
             "asr_overridden": asr["overridden"],
+            # TTS 生效值：本地 voice + 云端 provider/tts_voice/model/base_url（修订 46）
             "tts_voice": tts["voice"],
+            "tts_provider": tts["provider"] or "edge",
+            "tts_cloud_voice": tts["tts_voice"],
+            "tts_cloud_model": tts["model"],
+            "tts_base_url": tts["base_url"],
+            "tts_key_env": tts_key_env,
+            "tts_has_key": bool(load_api_key(tts_key_env)),
             "tts_overridden": tts["overridden"],
             # 全局热键（修订 33）：改热键需重启 GUI 才生效（监听器 GUI 启动时注册）
             "hotkey": hk["hotkey"],
@@ -374,7 +376,12 @@ class Api:
     def save_settings(self, provider: str = "", model: str = "",
                       base_url: str = "", api_key: str = "",
                       asr_model: str = "", tts_voice: str = "",
-                      hotkey: str = "", hotkey_enabled: Optional[bool] = None) -> dict:
+                      hotkey: str = "", hotkey_enabled: Optional[bool] = None,
+                      asr_provider: str = "", asr_cloud_model: str = "",
+                      asr_base_url: str = "", asr_api_key: str = "",
+                      tts_provider: str = "", tts_cloud_voice: str = "",
+                      tts_cloud_model: str = "", tts_base_url: str = "",
+                      tts_api_key: str = "") -> dict:
         provider = (provider or "").strip()
         model = (model or "").strip()
         base_url = (base_url or "").strip()
@@ -382,9 +389,23 @@ class Api:
         asr_model = (asr_model or "").strip()
         tts_voice = (tts_voice or "").strip()
         hotkey = (hotkey or "").strip()
+        # 云端 ASR / TTS 字段（修订 46）
+        asr_provider = (asr_provider or "").strip()
+        asr_cloud_model = (asr_cloud_model or "").strip()
+        asr_base_url = (asr_base_url or "").strip()
+        asr_api_key = (asr_api_key or "").strip()
+        tts_provider = (tts_provider or "").strip()
+        tts_cloud_voice = (tts_cloud_voice or "").strip()
+        tts_cloud_model = (tts_cloud_model or "").strip()
+        tts_base_url = (tts_base_url or "").strip()
+        tts_api_key = (tts_api_key or "").strip()
 
         if provider and provider not in ("anthropic", "openai"):
             return {"ok": False, "error": "provider 只能是 anthropic 或 openai"}
+        if asr_provider and asr_provider not in ("local", "openai"):
+            return {"ok": False, "error": "ASR provider 只能是 local 或 openai"}
+        if tts_provider and tts_provider not in ("edge", "openai"):
+            return {"ok": False, "error": "TTS provider 只能是 edge 或 openai"}
 
         # 热键改动先校验格式（修订 33），非法直接拒绝，不写坏值进本地文件
         if hotkey:
@@ -407,13 +428,39 @@ class Api:
             if not save_api_key(api_key, env_name):
                 return {"ok": False, "error": "API key 保存到系统密钥管理器失败，请检查 keyring 是否可用"}
 
-        # ASR / TTS 覆盖（修订 23）：非空才写；空 = 保留现有本地覆盖，不清空
+        # ASR 覆盖（修订 23/46）：非空才写；空 = 保留现有本地覆盖，不清空
         asr = dict(load_local_section("asr"))
         if asr_model:
             asr["model_size"] = asr_model
+        if asr_provider:
+            asr["provider"] = asr_provider
+        if asr_cloud_model:
+            asr["model"] = asr_cloud_model
+        if asr_base_url:
+            asr["base_url"] = asr_base_url
+        # 云端 ASR api_key 存 keyring（键名 = asr.api_key_env，默认 OPENAI_API_KEY）
+        if asr_api_key:
+            asr_env = str(self._state._config.get("asr", {}).get("api_key_env", "OPENAI_API_KEY"))
+            if not save_api_key(asr_api_key, asr_env):
+                return {"ok": False, "error": "云端 ASR API key 保存失败，请检查 keyring 是否可用"}
+
+        # TTS 覆盖（修订 23/46）
         tts = dict(load_local_section("tts"))
         if tts_voice:
             tts["voice"] = tts_voice
+        if tts_provider:
+            tts["provider"] = tts_provider
+        if tts_cloud_voice:
+            tts["tts_voice"] = tts_cloud_voice
+        if tts_cloud_model:
+            tts["model"] = tts_cloud_model
+        if tts_base_url:
+            tts["base_url"] = tts_base_url
+        # 云端 TTS api_key 存 keyring（键名 = tts.api_key_env，默认 OPENAI_API_KEY）
+        if tts_api_key:
+            tts_env = str(self._state._config.get("tts", {}).get("api_key_env", "OPENAI_API_KEY"))
+            if not save_api_key(tts_api_key, tts_env):
+                return {"ok": False, "error": "云端 TTS API key 保存失败，请检查 keyring 是否可用"}
 
         # ui 热键覆盖（修订 33）：hotkey 非空则写；hotkey_enabled 显式传才写
         ui = dict(load_local_section("ui"))
@@ -428,10 +475,11 @@ class Api:
             _LOG.exception("save_settings failed")
             return {"ok": False, "error": f"保存失败：{exc}"}
         _LOG.info("[gui] settings saved: provider=%s model=%s base_url=%s key=%s "
-                  "asr=%s tts=%s hotkey=%s",
+                  "asr=%s asr_provider=%s tts=%s tts_provider=%s hotkey=%s",
                   provider or "-", model or "-", base_url or "-",
                   "set" if api_key else "-",
-                  asr_model or "-", tts_voice or "-", hotkey or "-")
+                  asr_model or "-", asr_provider or "-",
+                  tts_voice or "-", tts_provider or "-", hotkey or "-")
         # 热键改了需重启 GUI 才重新注册；回传标记让前端提示用户
         return {"ok": True, "hotkey_restart_required": bool(hotkey) or hotkey_enabled is not None}
 
@@ -532,11 +580,11 @@ class Api:
         return self._voice_proc is not None and self._voice_proc.poll() is None
 
     def toggle_voice(self) -> dict:
-        """点击光圈 / 全局热键的统一入口（修订 33）：跑着就停，停着就启。
+        """全局热键 / GUI 按钮的统一入口（修订 33，修订 50 起浮窗已删）：跑着就停，停着就启。
 
         返回 voice_start / voice_stop 的结果，附带 action 字段（"started"/"stopped"）
-        供调用方（浮窗桥 / 热键闭包）决定是否 toast。启停本身是非破坏性生命周期操作
-        （§6 修订 19/33），不需二次确认。加锁避免点击与热键并发触发时启停打架。"""
+        供调用方（热键闭包 / GUI 按钮回调）决定是否 toast。启停本身是非破坏性生命周期操作
+        （§6 修订 19/33），不需二次确认。加锁避免热键与按钮并发触发时启停打架。"""
         with self._toggle_lock:
             if self._is_voice_running():
                 res = self.voice_stop()
@@ -579,24 +627,6 @@ class Api:
         return "未知原因，请查看 logs/voxctl.log"
 
 
-class OverlayBridge:
-    """状态浮窗（光圈）的 js_api 桥（修订 33）：**只**暴露 toggle()。
-
-    浮窗是纯展示 + 一个非破坏性 toggle 动作，绝不把主控制台 Api 的别名/设置/日志方法
-    暴露给浮窗前端（那些不需要，也不该从一枚屏幕小圆点触及）。点击光圈 → overlay.html
-    的 click 处理 → pywebview.api.toggle() → 这里 → run_gui 注入的 toggle 闭包。
-    """
-
-    def __init__(self, on_toggle) -> None:
-        self._on_toggle = on_toggle
-
-    def toggle(self) -> dict:
-        try:
-            res = self._on_toggle()
-            return res if isinstance(res, dict) else {"ok": True}
-        except Exception as exc:  # noqa: BLE001
-            _LOG.exception("overlay toggle failed")
-            return {"ok": False, "error": str(exc)}
 
 
 def _setup_gui_logging() -> None:
@@ -615,6 +645,33 @@ def _setup_gui_logging() -> None:
         )
     except Exception:  # noqa: BLE001
         return
+
+
+def _apply_dark_title_bar() -> None:
+    """用 DWM API 把主窗口标题栏切成暗色，与页面背景融合。
+
+    模块级函数（不依赖 run_gui 闭包）：通过 FindWindowW 按标题查 hwnd，
+    非 Windows / 找不到窗口 / DwmSetWindowAttribute 失败都静默跳过。
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        dwmapi = ctypes.windll.dwmapi
+        user32.FindWindowW.restype = wintypes.HWND
+        user32.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
+        hwnd = user32.FindWindowW(None, "VOXCTL 控制台")
+        if not hwnd:
+            return
+        # DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+        val = ctypes.c_int(1)
+        dwmapi.DwmSetWindowAttribute(
+            hwnd, 20, ctypes.byref(val), ctypes.sizeof(val))
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def run_gui() -> int:
@@ -637,51 +694,14 @@ def run_gui() -> int:
         background_color="#131009",
     )
 
-    # 状态浮窗（修订 26 / §8.11）：config ui.status_overlay 为真才起。
-    # 浮窗窗口 + tailer 线程都是可选增强，任何一步失败都不影响主控制台。
-    overlay_window = None
-    tailer = None
     hotkey_listener = None
 
-    # 点击光圈 / 全局热键的共用 toggle 闭包（修订 33）：调 api.toggle_voice()，
-    # 停止时给浮窗推一个 exit 事件让它立刻归灰（启动时状态由语音子进程经 tailer 推）。
+    # 全局热键的 toggle 闭包（修订 33，修订 50 起浮窗已删）：调 api.toggle_voice()。
     def _toggle_and_sync() -> dict:
-        res = api.toggle_voice()
-        if res.get("action") == "stopped" and overlay_window is not None:
-            try:
-                from ui.state_protocol import encode_event
-                # encode_event 产的是完整协议行；浮窗 setState 只吃 JSON 体，剥掉前缀
-                from ui.state_protocol import LINE_PREFIX
-                line = encode_event("exit")
-                body = line[len(LINE_PREFIX):] if line.startswith(LINE_PREFIX) else line
-                overlay_window.evaluate_js(
-                    "window.setState(%s)" % json.dumps(body))
-            except Exception:  # noqa: BLE001
-                pass
-        return res
-
-    if _overlay_enabled():
-        # 置环境变量作 emit 闸门（state_emitter 只在 VOXCTL_OVERLAY 为真时发协议行），
-        # 语音子进程经 Popen 继承此 env；关闭浮窗则语音端不产状态行，不污染控制台。
-        os.environ["VOXCTL_OVERLAY"] = "1"
-        try:
-            from ui.overlay_window import create_overlay_window
-            from ui.state_tailer import StateTailer
-            if _OVERLAY_HTML.is_file():
-                overlay_window = create_overlay_window(
-                    _OVERLAY_HTML, _PROJECT_ROOT,
-                    js_api=OverlayBridge(_toggle_and_sync),  # 修订 33：点击 toggle 桥
-                )
-                tailer = StateTailer(_VOICE_OUT_LOG, overlay_window)
-            else:
-                _LOG.warning("overlay.html not found at %s, overlay disabled", _OVERLAY_HTML)
-        except Exception:  # noqa: BLE001
-            _LOG.exception("failed to create status overlay (non-fatal)")
-            overlay_window = None
-            tailer = None
+        return api.toggle_voice()
 
     # 全局热键 toggle（修订 33）：config ui.hotkey_enabled 为真才注册。
-    # 注册失败（热键被占用 / 非 Windows）只记日志、不影响 GUI——点击光圈仍可 toggle。
+    # 注册失败（热键被占用 / 非 Windows）只记日志、不影响 GUI——GUI 控制台按钮仍可 toggle。
     hk = _effective_hotkey()
     if hk["enabled"]:
         try:
@@ -696,63 +716,20 @@ def run_gui() -> int:
             _LOG.exception("failed to start hotkey listener (non-fatal)")
             hotkey_listener = None
 
-    # 窗口关闭时杀掉还在跑的语音子进程，避免残留；停 tailer 线程；关浮窗；停热键
+    # 窗口关闭时杀掉还在跑的语音子进程，避免残留；停热键
     def _on_closing():
         if hotkey_listener is not None:
             try:
                 hotkey_listener.stop()
             except Exception:  # noqa: BLE001
                 pass
-        if tailer is not None:
-            try:
-                tailer.stop()
-            except Exception:  # noqa: BLE001
-                pass
-        if overlay_window is not None:
-            try:
-                overlay_window.destroy()
-            except Exception:  # noqa: BLE001
-                pass
         api.voice_stop()
-
-    def _apply_dark_title_bar():
-        """用 DWM API 把主窗口标题栏切成暗色，与页面背景融合。"""
-        if sys.platform != "win32":
-            return
-        try:
-            import ctypes
-            from ctypes import wintypes
-
-            user32 = ctypes.windll.user32
-            dwmapi = ctypes.windll.dwmapi
-            user32.FindWindowW.restype = wintypes.HWND
-            user32.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
-            hwnd = user32.FindWindowW(None, "VOXCTL 控制台")
-            if not hwnd:
-                return
-            # DWMWA_USE_IMMERSIVE_DARK_MODE = 20
-            val = ctypes.c_int(1)
-            dwmapi.DwmSetWindowAttribute(
-                hwnd, 20, ctypes.byref(val), ctypes.sizeof(val))
-        except Exception:  # noqa: BLE001
-            pass
 
     try:
         window.events.shown += _apply_dark_title_bar
         window.events.closing += _on_closing
     except Exception:  # noqa: BLE001
         pass
-
-    # tailer 要等 pywebview 事件循环起来、浮窗能 evaluate_js 才启动
-    def _on_shown():
-        if tailer is not None:
-            tailer.start()
-
-    if overlay_window is not None:
-        try:
-            overlay_window.events.shown += _on_shown
-        except Exception:  # noqa: BLE001
-            pass
 
     try:
         webview.start()
@@ -764,13 +741,6 @@ def run_gui() -> int:
         if hotkey_listener is not None:
             try:
                 hotkey_listener.stop()
-            except Exception:  # noqa: BLE001
-                pass
-        if tailer is not None:
-            tailer.stop()
-        if overlay_window is not None:
-            try:
-                overlay_window.destroy()
             except Exception:  # noqa: BLE001
                 pass
         api.voice_stop()  # 兜底：确保退出时不留语音子进程

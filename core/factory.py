@@ -15,10 +15,10 @@ from audio.output_mode import OutputMode, detect_output_mode
 from audio.player import AudioPlayer
 from audio.recorder import AudioRecorder
 from audio.vad import VADProcessor
-from asr.whisper_engine import WhisperEngine
+from asr.asr_engine import build_asr_engine
 from executor import Executor
 from nlu.intent_parser import IntentParser
-from tts.edge_tts_engine import TTSEngine
+from tts.tts_base import build_tts_engine
 
 if TYPE_CHECKING:
     from core.event_loop import MainLoop
@@ -51,12 +51,15 @@ def create_from_config(config: dict) -> "MainLoop":
         device_index=audio_cfg.get("input_device_index"),
     )
 
+    vad_cfg = config.get("vad", {})
     vad = VADProcessor.from_config(
-        config.get("vad", {}),
+        vad_cfg,
         use_headphone_threshold=(output_mode == OutputMode.HEADPHONE),
     )
+    # 修订 47 P1：speaker 模式打断开关（默认 false，§8.4 实测 TTS 泄漏概率 0.88-0.97）
+    speaker_interrupt_enabled = bool(vad_cfg.get("speaker_interrupt_enabled", False))
 
-    asr_engine = WhisperEngine.from_config(config.get("asr", {}))
+    asr_engine = build_asr_engine(config.get("asr", {}))
 
     plugin_registry = None
     plugin_tool_specs = None
@@ -82,7 +85,7 @@ def create_from_config(config: dict) -> "MainLoop":
     )
 
     player = AudioPlayer()
-    tts_engine = TTSEngine.from_config(config.get("tts", {}), player)
+    tts_engine = build_tts_engine(config.get("tts", {}), player)
 
     return MainLoop(
         recorder=recorder,
@@ -93,6 +96,7 @@ def create_from_config(config: dict) -> "MainLoop":
         tts_engine=tts_engine,
         player=player,
         output_mode=output_mode,
+        speaker_interrupt_enabled=speaker_interrupt_enabled,
     )
 
 

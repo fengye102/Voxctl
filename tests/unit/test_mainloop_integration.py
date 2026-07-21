@@ -23,7 +23,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
 
@@ -170,7 +170,6 @@ def _build_integration_loop(
 # 测试 1：端到端正常流程（一轮 open_app + 退出）
 # ======================================================================
 
-@patch("core.event_loop.state_emitter")
 class TestEndToEndNormalFlow(unittest.IsolatedAsyncioTestCase):
     """通过 run() 驱动真实 _main_loop()，验证一轮正常操作 + 退出全流程。
 
@@ -179,7 +178,7 @@ class TestEndToEndNormalFlow(unittest.IsolatedAsyncioTestCase):
         → ASR → EXECUTE → TTS（退出）→ loop 结束
     """
 
-    async def test_one_round_then_exit(self, mock_emitter):
+    async def test_one_round_then_exit(self):
         tts = _make_tts()
         open_result = ExecutionResult(success=True, action_type="open_app",
                                       payload={"app_name": "notepad"})
@@ -217,7 +216,6 @@ class TestEndToEndNormalFlow(unittest.IsolatedAsyncioTestCase):
 # 测试 2：退出流程时序（修订 14 核心：TTS 播完后才置 exit_requested）
 # ======================================================================
 
-@patch("core.event_loop.state_emitter")
 class TestExitTimingRev14(unittest.IsolatedAsyncioTestCase):
     """修订 14 修复的 bug：exit_requested 的置位时机。
 
@@ -233,7 +231,7 @@ class TestExitTimingRev14(unittest.IsolatedAsyncioTestCase):
         3. 循环正常退出
     """
 
-    async def test_tts_plays_goodbye_before_exit(self, mock_emitter):
+    async def test_tts_plays_goodbye_before_exit(self):
         tts = _make_tts()
         exit_result = ExecutionResult(
             success=True, action_type="exit_program", should_exit=True,
@@ -262,7 +260,6 @@ class TestExitTimingRev14(unittest.IsolatedAsyncioTestCase):
 # 测试 3：打断退出取消（修订 13 核心：打断"再见"→ loop 继续）
 # ======================================================================
 
-@patch("core.event_loop.state_emitter")
 class TestInterruptCancelsExitRev13(unittest.IsolatedAsyncioTestCase):
     """修订 13 修复的 bug：打断"再见"播报后程序照样退出。
 
@@ -277,7 +274,7 @@ class TestInterruptCancelsExitRev13(unittest.IsolatedAsyncioTestCase):
         Round 2: ExitProgramIntent → TTS（无打断）→ exit_requested=True → 正常退出
     """
 
-    async def test_interrupt_prevents_exit_loop_continues(self, mock_emitter):
+    async def test_interrupt_prevents_exit_loop_continues(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             # ---- VAD: process_chunk 总是返回 segment；
             #      process_chunk_interrupt 仅第 1 次返回 True（触发打断）
@@ -345,7 +342,6 @@ class TestInterruptCancelsExitRev13(unittest.IsolatedAsyncioTestCase):
 # 测试 4：二次确认流程（通过 _main_loop() 端到端）
 # ======================================================================
 
-@patch("core.event_loop.state_emitter")
 class TestConfirmationFlowE2E(unittest.IsolatedAsyncioTestCase):
     """二次确认全流程通过 run() 驱动真实 _main_loop()。
 
@@ -357,7 +353,7 @@ class TestConfirmationFlowE2E(unittest.IsolatedAsyncioTestCase):
         Round 3: "退出程序" → ExitProgramIntent → TTS → 退出
     """
 
-    async def test_confirm_then_exit(self, mock_emitter):
+    async def test_confirm_then_exit(self):
         need_confirm_result = ExecutionResult(
             success=False, action_type="close_app",
             needs_confirmation=True,
@@ -421,13 +417,12 @@ class TestConfirmationFlowE2E(unittest.IsolatedAsyncioTestCase):
 # 测试 5：连续 10 轮稳定性
 # ======================================================================
 
-@patch("core.event_loop.state_emitter")
 class TestMultiRoundStability(unittest.IsolatedAsyncioTestCase):
     """连续 10 轮正常操作 + 1 轮退出，验证 _main_loop() 的 while 循环
     在多轮迭代下不崩溃、不状态泄漏、不死循环。
     """
 
-    async def test_ten_rounds_then_exit(self, mock_emitter):
+    async def test_ten_rounds_then_exit(self):
         n_rounds = 10
         intents = [OpenAppIntent(app_name=f"app{i}") for i in range(n_rounds)]
         intents.append(ExitProgramIntent())

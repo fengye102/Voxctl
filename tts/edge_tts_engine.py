@@ -35,6 +35,17 @@ import numpy as np
 from executor import ExecutionResult
 from audio.player import AudioPlayer
 
+# 抽象层 + 共享音频工具迁移（修订 45）：异常层级迁到 tts.tts_base，
+# MP3 解码 / 帧转换迁到 tts._audio；这里 re-export 保持旧 import 路径可用。
+from tts.tts_base import (
+    BaseTTSEngine,
+    TTSDecodeError,
+    TTSError,
+    TTSSynthesizeError,
+)
+from tts._audio import decode_mp3 as _decode_mp3_shared
+from tts._audio import frame_to_float32_mono as _frame_to_float32_mono
+
 _LOG = logging.getLogger(__name__)
 
 # 解码线程从 pipe 读取 MP3 片段用的不可 seek 文件包装
@@ -68,19 +79,7 @@ class _PipeReader:
             os.close(self._fd)
 
 
-class TTSError(Exception):
-    """TTS 模块错误基类。"""
-
-
-class TTSSynthesizeError(TTSError):
-    """Edge TTS 合成失败（网络/服务问题）。"""
-
-
-class TTSDecodeError(TTSError):
-    """MP3 解码失败（av/PyAV 问题）。"""
-
-
-class TTSEngine:
+class TTSEngine(BaseTTSEngine):
     """Edge TTS 语音合成引擎，含流式播放 + pyttsx3 本地后备。
 
     主路径：edge-tts（云端）流式合成 MP3 → pipe → PyAV 解码线程 → Queue → player.play_stream()。
@@ -104,10 +103,8 @@ class TTSEngine:
         player: Optional[AudioPlayer] = None,
         local_fallback: bool = True,
     ) -> None:
+        super().__init__(player=player, local_fallback=local_fallback)
         self._voice = voice
-        self._player = player
-        self._local_fallback = local_fallback
-        self._pyttsx3_engine = None  # lazy init, only when needed
 
     @classmethod
     def from_config(cls, tts_cfg: dict, player: AudioPlayer) -> "TTSEngine":
@@ -155,38 +152,8 @@ class TTSEngine:
     # ------------------------------------------------------------------
     @staticmethod
     def _decode_mp3(mp3_bytes: bytes) -> tuple[np.ndarray, int]:
-        """用 PyAV 解码 MP3 → PCM float32 mono。
-
-        av（PyAv）是 FFmpeg 的 Python 绑定，faster-whisper 已依赖它，
-        不需要额外装系统 ffmpeg。解码后统一转 float32 mono [-1, 1]。
-        """
-        try:
-            container = av.open(io.BytesIO(mp3_bytes))
-        except av.error.InvalidDataError as exc:
-            raise TTSDecodeError(f"av.open 失败（非有效 MP3）: {exc}") from exc
-
-        samples: list[np.ndarray] = []
-        sample_rate: Optional[int] = None
-
-        try:
-            audio_stream = container.streams.audio[0]
-            for frame in container.decode(audio_stream):
-                if sample_rate is None:
-                    sample_rate = frame.sample_rate
-                arr = _frame_to_float32_mono(frame)
-                if arr.size > 0:
-                    samples.append(arr)
-        except av.error.FFmpegError as exc:
-            raise TTSDecodeError(f"av 解码失败: {exc}") from exc
-        finally:
-            container.close()
-
-        if not samples:
-            raise TTSDecodeError("av 解码后无音频帧")
-
-        pcm = np.concatenate(samples)
-        # edge-tts 默认 24kHz，兜底用 24000
-        return pcm, sample_rate or 24000
+        """用 PyAV 解码 MP3 → PCM float32 mono（委托 tts._audio 共享实现，修订 45）。"""
+        return _decode_mp3_shared(mp3_bytes)
 
     # ------------------------------------------------------------------
     async def speak(self, text: str) -> None:
@@ -323,71 +290,8 @@ class TTSEngine:
                 )
 
     # ------------------------------------------------------------------
-    async def speak_result(self, result: ExecutionResult) -> None:
-        """把 ExecutionResult 套模板生成播报文本，再合成播放。"""
-        text = format_result(result)
-        await self.speak(text)
-
-    # ------------------------------------------------------------------
-    # pyttsx3 本地后备 TTS
-    # ------------------------------------------------------------------
-
-    def _get_pyttsx3(self):
-        """Lazy-init pyttsx3 engine. Returns engine or None on failure.
-
-        pyttsx3 uses SAPI5 on Windows. Initialization is deferred to first
-        actual use so the import cost (and COM init) is only paid when
-        edge-tts is actually unavailable.
-        """
-        if self._pyttsx3_engine is not None:
-            return self._pyttsx3_engine
-        try:
-            import pyttsx3  # noqa: F811 -- lazy import
-            engine = pyttsx3.init()
-            engine.setProperty("rate", 150)  # slower for clarity
-            self._pyttsx3_engine = engine
-            _LOG.info("[TTS] pyttsx3 local engine initialized (SAPI5)")
-        except Exception as exc:  # noqa: BLE001
-            _LOG.warning("[TTS] pyttsx3 init failed, no local fallback: %s", exc)
-            return None
-        return self._pyttsx3_engine
-
-    async def _speak_local(self, text: str) -> None:
-        """Fallback: speak text via pyttsx3 (SAPI5 local TTS).
-
-        pyttsx3 handles its own audio output (not via audio/player.py).
-        For interrupt support, a stop callback is registered on the player
-        so that when the interrupt coordinator calls player.stop(), pyttsx3's
-        engine.stop() is also triggered, interrupting the local playback.
-        """
-        engine = self._get_pyttsx3()
-        if engine is None:
-            _LOG.warning("[TTS] pyttsx3 unavailable, speech skipped: %r", text)
-            return
-
-        _LOG.info("[TTS] pyttsx3 fallback speaking: %r", text)
-
-        def _on_player_stop():
-            """Called when player.stop() fires (interrupt signal)."""
-            try:
-                engine.stop()
-            except RuntimeError:
-                pass  # not in loop or already finished
-            except Exception:  # noqa: BLE001
-                pass
-
-        # Register so interrupt coordinator's player.stop() also stops pyttsx3
-        self._player.add_stop_callback(_on_player_stop)
-        try:
-            def _run_pyttsx3():
-                engine.say(text)
-                engine.runAndWait()
-
-            await asyncio.to_thread(_run_pyttsx3)
-        except Exception as exc:  # noqa: BLE001
-            _LOG.warning("[TTS] pyttsx3 fallback failed: %s", exc)
-        finally:
-            self._player.remove_stop_callback(_on_player_stop)
+    # speak_result 不重写：复用 BaseTTSEngine.speak_result（format_result + speak），
+    # 子类实现与 base 完全一致，重写是冗余。pyttsx3 本地后备也已上移到 BaseTTSEngine（修订 45）。
 
 
 # ===========================================================================
@@ -524,41 +428,8 @@ def _format_run_command(result: ExecutionResult) -> str:
 
 
 # ===========================================================================
-# PyAV 帧解码工具
+# PyAV 帧解码工具（_frame_to_float32_mono 已迁到 tts._audio，此处 import 复用，修订 45）
 # ===========================================================================
-
-def _frame_to_float32_mono(frame: av.AudioFrame) -> np.ndarray:
-    """把 av.AudioFrame 转成 float32 mono numpy 数组。
-
-    av 的 frame.to_ndarray() 返回格式取决于 frame.format：
-        s16 交错: shape (samples, 1) int16
-        s16p 平面: shape (channels, samples) int16
-        fltp 平面: shape (channels, samples) float32
-    统一转 float32 [-1, 1]，多通道 downmix 到 mono。
-    """
-    arr = frame.to_ndarray()
-
-    # int16 → float32
-    if arr.dtype == np.int16:
-        arr = arr.astype(np.float32) / 32768.0
-    elif arr.dtype == np.int32:
-        arr = arr.astype(np.float32) / 2147483648.0
-    elif arr.dtype == np.float32:
-        pass
-    else:
-        arr = arr.astype(np.float32)
-
-    # 多通道 → mono（取均值）
-    # av 平面格式 shape=(channels, samples)，交错格式 shape=(samples, channels)
-    if arr.ndim == 2:
-        if arr.shape[0] <= arr.shape[1]:
-            # 平面格式 (channels, samples)
-            arr = arr.mean(axis=0)
-        else:
-            # 交错格式 (samples, channels)
-            arr = arr.mean(axis=1)
-
-    return np.ascontiguousarray(arr, dtype=np.float32)
 
 
 __all__ = [

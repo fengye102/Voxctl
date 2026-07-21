@@ -1,7 +1,6 @@
-"""全局键盘热键监听（CLAUDE.md §8.11 / §6 / 修订 33）。
+"""全局键盘热键监听（CLAUDE.md §6 / 修订 33；修订 50 起浮窗已删，热键是 GUI 控制台按钮之外唯一的语音 toggle 入口）。
 
-给状态浮窗（光圈）配一个全局热键，按下即 toggle 语音子进程启停——与「点击光圈」
-是同一个非破坏性生命周期操作的等价触发（§6/§19 早已许可，免二次确认）。
+按下即 toggle 语音子进程启停——非破坏性生命周期操作（§6/§19 早已许可，免二次确认）。
 
 实现要点（纯 ctypes，stdlib，不引新依赖、非 IPC/socket/管道）：
     - Win32 `RegisterHotKey(NULL, id, mods, vk)` 注册系统级热键。NULL 窗口句柄意味着
@@ -16,7 +15,7 @@
 非 Windows：整体 no-op（RegisterHotKey/WM_HOTKEY 都是 Win32 概念，本项目 Windows 专属）。
 
 回调约定：`on_trigger` 由调用方（webui.gui.run_gui）传入，就是那个 toggle 闭包。回调在
-监听线程上执行，抛异常一律吞掉——热键线程绝不能因回调出错而崩（同浮窗"失败不崩"原则）。
+监听线程上执行，抛异常一律吞掉——热键线程绝不能因回调出错而崩（"失败不崩"原则）。
 """
 
 from __future__ import annotations
@@ -215,8 +214,14 @@ class HotkeyListener:
 
             # 必须先让消息队列存在：GetMessage 首次调用会建队列；RegisterHotKey 用 NULL hwnd
             # 时热键消息发到本线程队列。
-            if not user32.RegisterHotKey(None, _HOTKEY_ID, mods, vk):
-                err = ctypes.get_last_error() if hasattr(ctypes, "get_last_error") else 0
+            # 重新绑定 RegisterHotKey 启用 use_last_error=True，让 ctypes.get_last_error()
+            # 能可靠返回 RegisterHotKey 的真实错误码（默认调用不会保存 last error）。
+            RegisterHotKey = ctypes.WINFUNCTYPE(
+                wintypes.BOOL, wintypes.HWND, ctypes.c_int, wintypes.UINT, wintypes.UINT,
+                use_last_error=True,
+            )(("RegisterHotKey", user32))
+            if not RegisterHotKey(None, _HOTKEY_ID, mods, vk):
+                err = ctypes.get_last_error()
                 self._register_error = (
                     f"热键 {spec!r} 注册失败（可能已被其他程序占用，错误码 {err}）"
                 )
@@ -242,9 +247,13 @@ class HotkeyListener:
             finally:
                 user32.UnregisterHotKey(None, _HOTKEY_ID)
                 _LOG.info("hotkey unregistered: %s", spec)
-        except Exception:  # noqa: BLE001 —— 监听线程绝不能把异常抛出去
+        except Exception as exc:  # noqa: BLE001 —— 监听线程绝不能把异常抛出去
             _LOG.exception("hotkey listener thread crashed")
-            self._register_error = self._register_error or "热键监听线程异常"
+            # 把异常类型名拼进错误信息，方便 GUI toast 诊断（完整 traceback 在日志里）
+            self._register_error = (
+                self._register_error
+                or f"热键监听线程异常: {type(exc).__name__}: {exc}"
+            )
             self._tid_ready.set()
 
     def _fire(self) -> None:

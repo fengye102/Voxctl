@@ -24,19 +24,18 @@ import numpy as np
 
 from audio.output_mode import OutputMode
 from audio.recorder import AudioRecorderError
-from audio.vad import VADMode
+from audio.vad import CHUNK_DURATION_MS, VADMode
 from core.audit import log_interrupt_event
 from core.interrupt_coordinator import InterruptCoordinator
 from core.state import LoopState, State
 from executor import ExecutionResult
 from nlu.intent_parser import is_fallback_unknown
 from nlu.schema import (
+    AnyIntent,
     CancelIntent,
     ConfirmIntent,
-    ParsedIntent,
     UnknownIntent,
 )
-from ui import state_emitter
 
 _LOG = logging.getLogger(__name__)
 
@@ -67,6 +66,7 @@ class MainLoop:
         player,
         output_mode: OutputMode,
         audit_log_path: str = "logs/actions.log",
+        speaker_interrupt_enabled: bool = False,
     ) -> None:
         self._recorder = recorder
         self._vad = vad
@@ -76,6 +76,8 @@ class MainLoop:
         self._tts_engine = tts_engine
         self._player = player
         self._output_mode = output_mode
+        # 修订 47 P1：speaker 模式打断开关（默认 false，§8.4 实测 TTS 泄漏 0.88-0.97）
+        self._speaker_interrupt_enabled = speaker_interrupt_enabled
 
         self._state = LoopState()
         self._audio_queue: asyncio.Queue[np.ndarray] = asyncio.Queue()
@@ -89,12 +91,22 @@ class MainLoop:
         # 审计日志路径（§6 强制：打断事件也要写审计日志）
         self._audit_log_path = Path(audit_log_path)
 
+        # 阶段间数据暂存（只在单线程 asyncio 里访问，不需要锁）
+        self._pending_audio: Optional[np.ndarray] = None
+        self._pending_text: Optional[str] = None
+        # 修订 48 C2：类型从 ParsedIntent 扩展为 AnyIntent（插件意图可进 pending 路径）
+        self._pending_intent: Optional[AnyIntent] = None
+        self._pending_result: Optional[ExecutionResult] = None
+
+        # 投机 ASR（P2 #11）：VAD 静默确认期间抢先启动 ASR 以重叠延迟
+        self._speculative_asr_task: Optional[asyncio.Task] = None
+        self._speculative_asr_result = None  # ASRResult or None
+
     # ------------------------------------------------------------------
     async def run(self) -> None:
         """启动主循环。阻塞调用，直到 ExitProgramIntent 或 Ctrl+C。"""
-        self._loop = asyncio.get_event_loop()
+        self._loop = asyncio.get_running_loop()
         self._state.transition(State.LISTEN)
-        state_emitter.emit_state(State.LISTEN)
 
         # 启动录音（sounddevice 回调线程 → asyncio.Queue）
         try:
@@ -106,7 +118,7 @@ class MainLoop:
 
         asyncio.create_task(asyncio.to_thread(self._asr.warmup))
 
-        _LOG.info("=== Voxctl 主循环启动（Step 6 单向串行版）===")
+        _LOG.info("=== Voxctl 主循环启动（Step 7 全双工版）===")
         print("=== Voxctl 已启动，对着麦克风说话即可（说\"退出程序\"结束）===")
 
         try:
@@ -141,11 +153,12 @@ class MainLoop:
             except Exception:
                 _LOG.exception("main loop iteration failed (state=%s)", self._state.state.value)
                 # 出错时播报一句简短提示，然后回到 LISTEN，不让循环崩
-                state_emitter.emit_error("出错了")
-                try:
-                    await self._tts_engine.speak("出错了，请再说一次")
-                except Exception:
-                    pass  # noqa: BLE001 TTS 也挂了就只能日志
+                # 若异常发生在 TTS 阶段，不再调 TTS（避免递归异常 / 浪费资源）
+                if self._state.state != State.TTS:
+                    try:
+                        await self._tts_engine.speak("出错了，请再说一次")
+                    except Exception:
+                        pass  # noqa: BLE001 TTS 也挂了就只能日志
                 self._state.transition(State.LISTEN)
 
     # ==================================================================
@@ -159,7 +172,6 @@ class MainLoop:
         有意义语音，剩余 ~480ms 纯等静默确认。此期间抢先启动 ASR 转录，
         最终 segment 到达时直接用结果，省掉等待时间。
         """
-        state_emitter.emit_state(State.LISTEN)
         chunk = await self._audio_queue.get()
         segment = self._vad.process_chunk(chunk, mode=VADMode.LISTEN)
 
@@ -169,10 +181,31 @@ class MainLoop:
                 task = self._speculative_asr_task
                 self._speculative_asr_task = None
                 try:
-                    self._speculative_asr_result = await task
-                    _LOG.info("speculative ASR hit — saved ~%dms",
-                              self._vad._cfg.silence_confirm_frames * 32)
-                except (asyncio.CancelledError, Exception):
+                    spec_result = await task
+                    # 修订 47 C3 / 修订 48：投机 ASR 质量校验——满足任一条件即丢弃，
+                    # 回退到最终 segment（投机用的是 preliminary_segment，较短，
+                    # 质量可能差于最终 segment）：
+                    #   - is_empty：空文本
+                    #   - no_speech_prob > 0.8：高静音概率
+                    #   - avg_logprob < -1.0：低平均对数概率（幻觉短文本，修订 48 新增）
+                    if (spec_result.is_empty
+                            or spec_result.no_speech_prob > 0.8
+                            or spec_result.avg_logprob < -1.0):
+                        _LOG.debug(
+                            "speculative ASR low quality "
+                            "(empty=%s/no_speech=%.2f/logprob=%.2f), fallback",
+                            spec_result.is_empty,
+                            spec_result.no_speech_prob,
+                            spec_result.avg_logprob,
+                        )
+                        self._pending_audio = segment
+                    else:
+                        self._speculative_asr_result = spec_result
+                        _LOG.info("speculative ASR hit — saved ~%dms",
+                                  self._vad.silence_confirm_frames * CHUNK_DURATION_MS)
+                # 仅吞普通异常（ASR 失败/任务抛错），让 CancelledError 正常传播
+                # （当前协程被外部 cancel 时不应被吞掉，破坏 asyncio 取消机制）
+                except Exception:
                     _LOG.debug("speculative ASR unusable, falling back to final segment")
                     self._pending_audio = segment
             else:
@@ -196,19 +229,8 @@ class MainLoop:
                     name="speculative_asr",
                 )
 
-    # 用实例属性暂存阶段间数据（只在单线程 asyncio 里访问，不需要锁）
-    _pending_audio: Optional[np.ndarray] = None
-    _pending_text: Optional[str] = None
-    _pending_intent: Optional[ParsedIntent] = None
-    _pending_result: Optional[ExecutionResult] = None
-
-    # 投机 ASR（P2 #11）：VAD 静默确认期间抢先启动 ASR 以重叠延迟
-    _speculative_asr_task: Optional[asyncio.Task] = None
-    _speculative_asr_result = None  # ASRResult or None
-
     async def _phase_asr(self) -> None:
         """ASR：把语音片段转写为文本，然后做意图解析，切到 EXECUTE。"""
-        state_emitter.emit_state(State.ASR)
 
         # 优先使用投机 ASR 结果（P2 #11 投机 ASR）
         if self._speculative_asr_result is not None:
@@ -246,8 +268,6 @@ class MainLoop:
                   result.duration_s, result.elapsed_s)
         print(f"[你] {text}")
 
-        # 意图解析阶段视觉上归 EXECUTE（旋转环），并把识别文本带给浮窗展示
-        state_emitter.emit_state(State.EXECUTE, text=text)
 
         # 意图解析（同步 LLM 调用，丢线程池）
         try:
@@ -272,7 +292,6 @@ class MainLoop:
 
     async def _phase_execute(self) -> None:
         """EXECUTE：执行意图，根据结果决定下一步。"""
-        state_emitter.emit_state(State.EXECUTE)
         intent = self._pending_intent
         raw_text = self._pending_text or ""
         self._pending_intent = None
@@ -350,46 +369,58 @@ class MainLoop:
             self._state.transition(State.LISTEN)
             return
 
-        # 浮窗：执行失败/未听懂的结果归"错误"（红闪烁），否则 TTS（绿波形）
-        if not result.success:
-            state_emitter.emit_error(result.error or "出错了")
-        else:
-            state_emitter.emit_state(State.TTS)
-
         # 启动打断监听（与 speak_result 并发）
-        self._interrupt_coord.reset()
-        monitor_task = asyncio.create_task(
-            self._interrupt_coord.monitor(), name="interrupt_monitor"
+        # 修订 47 P1：speaker 模式默认关闭打断（§8.4 实测 TTS 泄漏概率 0.88-0.97，
+        # monitor 会把泄漏的播报声误判为用户打断）。关闭时跳过 monitor，
+        # 但播完后仍需 drain_queue 清掉 TTS 期间累积的泄漏音频块，否则下一轮
+        # LISTEN 会立即被泄漏音频误触发
+        interrupt_enabled = not (
+            self._output_mode == OutputMode.SPEAKER
+            and not self._speaker_interrupt_enabled
         )
+        monitor_task: Optional[asyncio.Task] = None
+        if interrupt_enabled:
+            self._interrupt_coord.reset()
+            monitor_task = asyncio.create_task(
+                self._interrupt_coord.monitor(), name="interrupt_monitor"
+            )
 
         try:
             await self._tts_engine.speak_result(result)
         except Exception as exc:  # noqa: BLE001 TTS 网络/解码失败不能崩主循环
             _LOG.warning("TTS 播报失败: %s", exc)
-            state_emitter.emit_error("语音播报失败")
         finally:
-            if not monitor_task.done():
+            if monitor_task is not None and not monitor_task.done():
                 monitor_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await monitor_task
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await monitor_task
 
         # 处理打断
-        if self._interrupt_coord.interrupted:
+        if interrupt_enabled and self._interrupt_coord.interrupted:
             self._handle_tts_interrupt(result)
             return
+
+        # speaker 模式关闭打断时，仍要清空 TTS 期间累积的泄漏音频块 + VAD reset，
+        # 否则下一轮 LISTEN 立即被泄漏音频误触发
+        if not interrupt_enabled:
+            drained = InterruptCoordinator.drain_queue(self._audio_queue)
+            if drained > 0:
+                _LOG.debug(
+                    "speaker mode (interrupt disabled): drained %d TTS-leak chunks",
+                    drained,
+                )
+            self._vad.reset()
 
         # 正常播完，决定下一步
         if result.should_exit:
             # 修订 14：exit_requested 延迟到"再见"正常播完才置位。
             # EXECUTE 阶段置位会让主循环 while 在 TTS 前 break，播报被跳过。
             _LOG.info("退出播报正常完成，置 exit_requested，主循环退出")
-            state_emitter.emit_exit()
             self._state.exit_requested = True
             return  # run() 的 while 会 break
 
         if self._state.pending is not None:
             # 刚播完"确定要...吗？"，切到等待确认
-            state_emitter.emit_state(State.AWAIT_CONFIRM)
             self._state.transition(State.AWAIT_CONFIRM)
         else:
             self._state.rounds_completed += 1
@@ -402,7 +433,6 @@ class MainLoop:
         这里只是阻塞在音频队列上等下一句话，VAD 切片后切到 ASR。
         """
         # 和 _phase_listen 一样，只是状态标记不同（让 _handle_confirm_response 知道现在是确认阶段）
-        state_emitter.emit_state(State.AWAIT_CONFIRM)
         chunk = await self._audio_queue.get()
         segment = self._vad.process_chunk(chunk, mode=VADMode.LISTEN)
         if segment is not None:
@@ -459,7 +489,7 @@ class MainLoop:
     # 二次确认处理
     # ==================================================================
 
-    async def _handle_confirm_response(self, intent: ParsedIntent, text: str) -> None:
+    async def _handle_confirm_response(self, intent: AnyIntent, text: str) -> None:
         """AWAIT_CONFIRM 状态下收到新意图的处理。
 
         - ConfirmIntent：用 saved intent + confirmed=True 重新执行
@@ -503,7 +533,6 @@ class MainLoop:
 
     @staticmethod
     def _print_user_error(msg: str) -> None:
-        state_emitter.emit_error(msg)
         if hasattr(sys.stdout, "reconfigure"):
             try:
                 sys.stdout.reconfigure(encoding="utf-8")
