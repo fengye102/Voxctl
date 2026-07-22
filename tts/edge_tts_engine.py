@@ -328,10 +328,25 @@ def format_result(result: ExecutionResult) -> str:
         return _format_llm_error(result)
     if action == "asr_error":
         return "语音识别出了问题，请再说一次"
+    if action == "asr_empty_hint":
+        return "刚才没听清，请再说一次"
     if action == "intent_error":
         return "理解指令时出了问题，请再试一次"
 
-    # 未知的 action_type，返回通用错误播报
+    # 未知 action_type（含插件意图）：优先 payload.message，再通用成功/失败
+    return _format_plugin_or_unknown(result)
+
+
+def _format_plugin_or_unknown(result: ExecutionResult) -> str:
+    """插件 / 未知 action_type 的播报约定。
+
+    - payload.message 非空字符串 → 优先播报（插件 handler 约定）
+    - 成功无 message →「操作完成」
+    - 失败无 message → error 或「操作失败」
+    """
+    msg = result.payload.get("message")
+    if isinstance(msg, str) and msg.strip():
+        return msg.strip()
     if result.success:
         return "操作完成"
     return result.error or "操作失败"
@@ -349,25 +364,93 @@ def _format_llm_error(result: ExecutionResult) -> str:
     return "服务出了问题，请稍后再试"
 
 
+def _format_candidate_list(candidates: list) -> str:
+    """候选名列表 → 口语串：最多 3 个，超出加「等」。"""
+    names = [str(c).strip() for c in candidates if str(c).strip()]
+    if not names:
+        return ""
+    if len(names) > 3:
+        return "、".join(names[:3]) + "等"
+    return "、".join(names)
+
+
+def _friendly_failure(
+    error: Optional[str],
+    *,
+    not_found: str,
+    not_allowed: str,
+    path_missing: str | None = None,
+    no_args: str | None = None,
+    unsupported_type: str | None = None,
+    empty_path: str | None = None,
+    fallback: str,
+) -> str:
+    """按 error 关键字匹配短口语模板；匹配不到再回退 error / fallback。"""
+    err = error or ""
+    if "不在允许范围" in err:
+        return not_allowed
+    if "没有找到" in err or "没找到" in err:
+        return not_found
+    if path_missing is not None and ("路径不存在" in err or "程序不存在" in err):
+        return path_missing
+    if path_missing is not None and ("文件不存在" in err or "不存在" in err and "路径" not in err):
+        # open_file: 文件不存在；open_app 路径不存在已在上条
+        if "文件不存在" in err:
+            return path_missing
+    if no_args is not None and "不支持参数" in err:
+        return no_args
+    if unsupported_type is not None and (
+        "不支持打开" in err or "类型不支持" in err or "文件类型不支持" in err
+    ):
+        return unsupported_type
+    if empty_path is not None and ("路径为空" in err or "文件路径为空" in err):
+        return empty_path
+    if "超时" in err:
+        return "执行超时，请稍后再试"
+    # 兜底：有 error 就播 error（可能已是中文），否则用 fallback
+    return err or fallback
+
+
 def _format_open_app(result: ExecutionResult) -> str:
     p = result.payload
-    app_name = p.get("app_name", "")
+    app_name = p.get("app_name", "") or ""
     if result.success:
-        return f"已为你打开 {app_name}"
-    return result.error or f"无法打开 {app_name}"
+        return f"已为你打开 {app_name}" if app_name else "已为你打开应用"
+
+    # 多候选：优先 payload.candidates，不把 error 里的 !r 引号原样甩给用户
+    candidates = p.get("candidates")
+    if isinstance(candidates, (list, tuple)) and candidates:
+        listed = _format_candidate_list(list(candidates))
+        if listed:
+            return f"找到多个应用：{listed}，请说更完整的名称"
+
+    return _friendly_failure(
+        result.error,
+        not_found=f"没有找到应用{(' ' + app_name) if app_name else ''}".rstrip()
+        if app_name
+        else "没有找到该应用",
+        not_allowed="这个应用不在允许范围内",
+        path_missing=f"{app_name} 的安装路径不存在" if app_name else "应用路径不存在",
+        fallback=f"无法打开 {app_name}" if app_name else "无法打开应用",
+    )
 
 
 def _format_close_app(result: ExecutionResult) -> str:
     p = result.payload
-    app_name = p.get("app_name", "")
+    app_name = p.get("app_name", "") or ""
     if result.needs_confirmation:
-        return f"确定要关闭 {app_name} 吗？"
+        return f"确定要关闭 {app_name} 吗？" if app_name else "确定要关闭该应用吗？"
     if result.success:
         terminated = p.get("terminated_pids") or []
         if not terminated:
-            return f"{app_name} 当前未在运行"
-        return f"已关闭 {app_name}"
-    return result.error or f"无法关闭 {app_name}"
+            return f"{app_name} 当前未在运行" if app_name else "该应用当前未在运行"
+        return f"已关闭 {app_name}" if app_name else "已关闭应用"
+    return _friendly_failure(
+        result.error,
+        not_found=f"没有找到应用 {app_name}" if app_name else "没有找到该应用",
+        not_allowed="这个应用不在允许范围内",
+        fallback=f"无法关闭 {app_name}" if app_name else "无法关闭应用",
+    )
 
 
 def _format_query_system(result: ExecutionResult) -> str:
@@ -409,22 +492,37 @@ def _format_open_file(result: ExecutionResult) -> str:
     p = result.payload
     if result.success:
         filename = p.get("filename", "")
-        return f"已打开文件 {filename}"
-    return result.error or "无法打开文件"
+        return f"已打开文件 {filename}" if filename else "已打开文件"
+    return _friendly_failure(
+        result.error,
+        not_found="文件不存在",
+        not_allowed="这个路径不在允许范围内",
+        path_missing="文件不存在",
+        unsupported_type="不支持打开此类文件",
+        empty_path="文件路径为空",
+        fallback="无法打开文件",
+    )
 
 
 def _format_run_command(result: ExecutionResult) -> str:
     p = result.payload
-    cmd_name = p.get("command_name", "")
+    cmd_name = p.get("command_name", "") or ""
     if result.needs_confirmation:
-        return f"确定要执行 {cmd_name} 吗？"
+        return f"确定要执行 {cmd_name} 吗？" if cmd_name else "确定要执行该命令吗？"
     if result.success:
         stdout = p.get("stdout") or ""
         # stdout 短且非空时播报输出，否则只播报"已完成"
         if stdout and len(stdout) <= 50:
             return f"命令 {cmd_name} 已执行完成，输出：{stdout}"
-        return f"命令 {cmd_name} 已执行完成"
-    return result.error or f"命令 {cmd_name} 执行失败"
+        return f"命令 {cmd_name} 已执行完成" if cmd_name else "命令已执行完成"
+    return _friendly_failure(
+        result.error,
+        not_found=f"没有找到命令 {cmd_name}" if cmd_name else "没有找到该命令",
+        not_allowed="这个命令不在允许范围内",
+        path_missing="命令程序不存在",
+        no_args="该命令不支持参数",
+        fallback=f"命令 {cmd_name} 执行失败" if cmd_name else "命令执行失败",
+    )
 
 
 # ===========================================================================

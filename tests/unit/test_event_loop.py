@@ -325,7 +325,7 @@ class TestSpeculativeAsr(unittest.IsolatedAsyncioTestCase):
 class TestPhaseAsr(unittest.IsolatedAsyncioTestCase):
 
     async def test_empty_asr_result_returns_to_listen(self):
-        """ASR 返回空文本 → 静默回 LISTEN，不进 EXECUTE。"""
+        """ASR 返回空文本（未达连续阈值）→ 静默回 LISTEN，不进 EXECUTE。"""
         asr = _make_asr(text="", is_empty=True)
         loop = _build_loop(asr_engine=asr)
         loop._state.transition(State.ASR)
@@ -334,6 +334,45 @@ class TestPhaseAsr(unittest.IsolatedAsyncioTestCase):
         await loop._phase_asr()
 
         self.assertEqual(loop._state.state, State.LISTEN)
+        self.assertEqual(loop._consecutive_empty_asr, 1)
+
+    async def test_consecutive_empty_asr_hint_on_third(self):
+        """连续 3 次 ASR 空结果 → 切 TTS 轻提示；前 2 次仍 LISTEN。"""
+        asr = _make_asr(text="", is_empty=True)
+        loop = _build_loop(asr_engine=asr)
+
+        for expected_count in (1, 2):
+            loop._state.transition(State.ASR)
+            loop._pending_audio = np.zeros(16000, dtype=np.float32)
+            await loop._phase_asr()
+            self.assertEqual(loop._state.state, State.LISTEN)
+            self.assertEqual(loop._consecutive_empty_asr, expected_count)
+
+        loop._state.transition(State.ASR)
+        loop._pending_audio = np.zeros(16000, dtype=np.float32)
+        await loop._phase_asr()
+
+        self.assertEqual(loop._state.state, State.TTS)
+        self.assertEqual(loop._consecutive_empty_asr, 0)
+        self.assertIsNotNone(loop._pending_result)
+        self.assertEqual(loop._pending_result.action_type, "asr_empty_hint")
+
+    async def test_nonempty_asr_resets_empty_counter(self):
+        """成功识别非空文本时重置连续空结果计数。"""
+        intent = OpenAppIntent(app_name="chrome")
+        asr = _make_asr(text="打开浏览器")
+        loop = _build_loop(
+            asr_engine=asr,
+            intent_parser=_make_parser(intent=intent),
+        )
+        loop._consecutive_empty_asr = 2
+        loop._state.transition(State.ASR)
+        loop._pending_audio = np.zeros(16000, dtype=np.float32)
+
+        await loop._phase_asr()
+
+        self.assertEqual(loop._consecutive_empty_asr, 0)
+        self.assertEqual(loop._state.state, State.EXECUTE)
 
     async def test_valid_text_transitions_to_execute(self):
         """ASR 识别出文本 → 意图解析 → 切到 EXECUTE。"""

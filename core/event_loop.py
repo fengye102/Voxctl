@@ -102,6 +102,10 @@ class MainLoop:
         self._speculative_asr_task: Optional[asyncio.Task] = None
         self._speculative_asr_result = None  # ASRResult or None
 
+        # 连续 ASR 空结果计数：≥N 次时轻提示「没听清」（默认 N=3）
+        self._consecutive_empty_asr: int = 0
+        self._empty_asr_hint_threshold: int = 3
+
     # ------------------------------------------------------------------
     async def run(self) -> None:
         """启动主循环。阻塞调用，直到 ExitProgramIntent 或 Ctrl+C。"""
@@ -118,8 +122,25 @@ class MainLoop:
 
         asyncio.create_task(asyncio.to_thread(self._asr.warmup))
 
-        _LOG.info("=== Voxctl 主循环启动（Step 7 全双工版）===")
-        print("=== Voxctl 已启动，对着麦克风说话即可（说\"退出程序\"结束）===")
+        mode_cn = "耳机" if self._output_mode == OutputMode.HEADPHONE else "外放"
+        if self._output_mode == OutputMode.HEADPHONE:
+            interrupt_cn = "开启（播报期间可语音打断）"
+        elif self._speaker_interrupt_enabled:
+            interrupt_cn = "开启（外放打断已启用，可能误触发）"
+        else:
+            interrupt_cn = "关闭（播报期间请等播完；全双工请用耳机）"
+
+        banner = (
+            f"=== Voxctl 已启动，对着麦克风说话即可（说\"退出程序\"结束）===\n"
+            f"[模式] {mode_cn} | 打断：{interrupt_cn}"
+        )
+        _LOG.info(
+            "=== Voxctl 主循环启动（Step 7 全双工版）mode=%s speaker_interrupt=%s ===",
+            self._output_mode.value,
+            self._speaker_interrupt_enabled,
+        )
+        _LOG.info("[模式] %s | 打断：%s", mode_cn, interrupt_cn)
+        print(banner)
 
         try:
             await self._main_loop()
@@ -257,11 +278,32 @@ class MainLoop:
             return
 
         if result.is_empty or not result.text.strip():
-            _LOG.info("ASR 空结果（静音/噪声/置信度低），回到 LISTEN")
-            # 不播报，静默回到监听（避免每次键盘声都说"没听清"）
+            self._consecutive_empty_asr += 1
+            n = self._consecutive_empty_asr
+            threshold = self._empty_asr_hint_threshold
+            if n >= threshold:
+                _LOG.info(
+                    "ASR 连续空结果 %d 次（≥%d），轻提示「没听清」",
+                    n, threshold,
+                )
+                self._consecutive_empty_asr = 0
+                self._pending_result = ExecutionResult(
+                    success=True,
+                    action_type="asr_empty_hint",
+                    payload={"message": "刚才没听清，请再说一次"},
+                )
+                self._state.transition(State.TTS)
+                return
+            _LOG.info(
+                "ASR 空结果（静音/噪声/置信度低，连续 %d/%d），回到 LISTEN",
+                n, threshold,
+            )
+            # 未达阈值：静默回到监听（避免每次键盘声都说"没听清"）
             self._state.transition(State.LISTEN)
             return
 
+        # 成功识别非空文本：重置空结果计数
+        self._consecutive_empty_asr = 0
         text = result.text.strip()
         _LOG.info("ASR: %r (no_speech_prob=%.2f, logprob=%.2f, %.2fs/%.2fs)",
                   text, result.no_speech_prob, result.avg_logprob,

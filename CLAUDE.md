@@ -215,8 +215,9 @@ Voxctl/
 │   └── whitelist.py           # 白名单校验 + 二次确认逻辑
 │
 ├── plugins/                    # 插件机制（修订 42）：扩展意图类型，不扩展权限
-│   ├── __init__.py             # PluginRegistry：扫描/加载/校验插件，提供 dispatch + tool specs 合并
-│   └── base.py                 # PluginSpec 数据类 + PluginError 异常 + 插件开发约束说明
+│   ├── __init__.py             # PluginRegistry：扫描/加载/校验插件，提供 dispatch + tool specs 合并（跳过 base.py 不当插件加载，修订 51）
+│   ├── base.py                 # PluginSpec 数据类 + PluginError 异常 + 插件开发约束说明
+│   └── volume_control.py       # 音量/静音插件（修订 51）：ctypes keybd_event 发虚拟音量键，无 pycaw/subprocess
 │
 ├── tts/
 │   ├── __init__.py

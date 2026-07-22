@@ -113,6 +113,12 @@ class PluginRegistry:
         for py_file in sorted(plugins_path.glob("*.py")):
             if py_file.name.startswith("_"):
                 continue
+            # 跳过包基础设施文件：base.py 是 PluginSpec/异常的定义处，不是插件。
+            # 若误当插件加载，其 _load_file 失败分支会 pop 掉 sys.modules["plugins.base"]，
+            # 导致后续插件 `from plugins.base import PluginSpec` 绑定到一个全新的类对象，
+            # 与注册器持有的 PluginSpec 类身份不一致，isinstance 校验假性失败。
+            if py_file.name == "base.py":
+                continue
             try:
                 registry._load_file(py_file)
             except PluginLoadError as exc:
