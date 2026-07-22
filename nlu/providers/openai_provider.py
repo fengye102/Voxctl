@@ -60,15 +60,19 @@ class OpenAIClient(LLMClient):
         self._client = openai.OpenAI(**client_kwargs)
 
     # ------------------------------------------------------------------
-    def parse_intent(self, text: str, schema: dict) -> dict:
+    def parse_intent(self, text: str, schema: dict, context: Optional[str] = None) -> dict:
         tools = self._build_tools(schema)
         allowed_names = {t["function"]["name"] for t in tools}
+        system = _SYSTEM_PROMPT
+        if context:
+            # 多轮上下文（修订 56）：并入 system 消息，仅辅助指代消解。
+            system = f"{_SYSTEM_PROMPT}\n\n[上一轮参考，仅用于消解'它/这个'等指代]\n{context}"
 
         try:
             response = self._client.chat.completions.create(
                 model=self._model,
                 messages=[
-                    {"role": "system", "content": _SYSTEM_PROMPT},
+                    {"role": "system", "content": system},
                     {"role": "user", "content": text},
                 ],
                 tools=tools,

@@ -18,9 +18,9 @@
 
 | 文件 | 作用 |
 |---|---|
-| [CLAUDE.md](CLAUDE.md) | **项目唯一事实来源**。架构图、技术栈、MVP 范围、分步开发计划、安全规则、Windows 踩坑、33 条变更记录。改架构先改这里再改代码。 |
+| [CLAUDE.md](CLAUDE.md) | **项目唯一事实来源**。架构图、技术栈、MVP 范围、分步开发计划、安全规则、Windows 踩坑；全部变更记录已拆到 [CHANGELOG.md](CHANGELOG.md)（修订 40）。改架构先改这里再改代码。 |
 | [README.md](README.md) | 本文件。全项目文件地图。 |
-| [config.yaml](config.yaml) | **主配置**（用户可改，含手写注释）。audio / vad / asr / llm / tts / ui / whitelist 全部字段。白名单三类（apps 别名、commands 命令、paths 路径）+ 打断阈值调优指南都在这里。`ui` 块控制全局热键（`hotkey` / `hotkey_enabled`）。禁止在代码里硬编码这些值。 |
+| [config.yaml](config.yaml) | **主配置**（用户可改，含手写注释）。audio / vad / asr / llm / tts / ui / whitelist 全部字段。白名单三类（apps 别名、commands 命令、paths 路径）+ 打断阈值调优指南都在这里。`ui` 块控制全局热键（`hotkey` / `hotkey_enabled`）。`wake_word` / `dictation` / `context` / `metrics` 四块是修订 56 新增（唤醒词开关+短语 / 听写退出短语 / 多轮上下文开关 / 度量埋点开关）。禁止在代码里硬编码这些值。 |
 | [voxctl.local.yaml](voxctl.local.yaml) | GUI 控制台维护的**本地覆盖**（机器写入，gitignore）。覆盖 config 的 llm/asr/tts 三块，**含 api_key 明文**。⚠ 随 exe 文件夹走，**勿分享 / 勿传 git**。 |
 | [user_apps.yaml](user_apps.yaml) | GUI 维护的**用户别名表**（应用名→exe/.lnk 路径，机器写入，gitignore）。启动时合并进 `whitelist.apps`，config.yaml 同名优先。独立成文件是为了不破坏 config.yaml 的注释。（当前工作区可能尚未生成。） |
 | [requirements.txt](requirements.txt) | 依赖清单（宽松基线版本）。pydantic/anthropic/openai/numpy/sounddevice/onnxruntime/faster-whisper/opencc/psutil/edge-tts/av(PyAV)/PyYAML/pywebview。注明修订 21 起用 onnxruntime 跑 VAD、去掉 torch。 |
@@ -66,12 +66,12 @@
 | 文件 | 作用 |
 |---|---|
 | [nlu/__init__.py](nlu/__init__.py) | 导出 IntentParser、schema 符号、LLM 异常。 |
-| [nlu/schema.py](nlu/schema.py) | **意图数据结构**（pydantic）。OpenApp/CloseApp/QuerySystem/OpenFile/RunCommand/ExitProgram/Confirm/Cancel/Unknown 各意图模型 + `IntentType` 枚举 + `ParsedIntent` 判别联合 + `validate_intent()` + `build_intent_schema()`（生成 tool 规格）+ `safe_model_dump()`（安全转 dict，供 event_loop/executor 审计日志用）。中文字段描述。 |
-| [nlu/llm_client.py](nlu/llm_client.py) | **LLM 抽象层**。`LLMClient` 抽象基类（`parse_intent(text, schema)` + `_resolve_name()` 处理中转站 tool 名重写的公共逻辑）、异常层级（LLMError/Timeout/Auth/RateLimit/API/Parse）、`build_client()` 工厂（惰性导入按 provider 实例化）。屏蔽厂商差异。 |
-| [nlu/intent_parser.py](nlu/intent_parser.py) | **意图解析器**。`from_config()` 从环境变量读 api_key（空则 RuntimeError），`parse()` 把 LLM 错误映射为 UnknownIntent 兜底（Auth 错误重抛）。`LLMConfig` 数据类。 |
+| [nlu/schema.py](nlu/schema.py) | **意图数据结构**（pydantic）。OpenApp/CloseApp/QuerySystem/OpenFile/RunCommand/ExitProgram/Confirm/Cancel/Unknown/EnterDictation（修订 56）各意图模型 + `IntentType` 枚举 + `ParsedIntent` 判别联合 + `validate_intent()` + `build_intent_schema()`（生成 tool 规格）+ `safe_model_dump()`（安全转 dict，供 event_loop/executor 审计日志用）。中文字段描述。 |
+| [nlu/llm_client.py](nlu/llm_client.py) | **LLM 抽象层**。`LLMClient` 抽象基类（`parse_intent(text, schema, context=None)`——`context` 为上一轮指代摘要，修订 56；+ `_resolve_name()` 处理中转站 tool 名重写的公共逻辑）、异常层级（LLMError/Timeout/Auth/RateLimit/API/Parse）、`build_client()` 工厂（惰性导入按 provider 实例化）。屏蔽厂商差异。 |
+| [nlu/intent_parser.py](nlu/intent_parser.py) | **意图解析器**。`from_config()` 从环境变量读 api_key（空则 RuntimeError），`parse(text, context=None)` 把 LLM 错误映射为 UnknownIntent 兜底（Auth 错误重抛）；`context` 透传给 client 供多轮指代消解（修订 56）。`LLMConfig` 数据类。 |
 | [nlu/providers/__init__.py](nlu/providers/__init__.py) | 仅文档字符串（无顶层 provider 导入，供惰性加载 / PyInstaller 裁剪）。 |
-| [nlu/providers/anthropic_provider.py](nlu/providers/anthropic_provider.py) | **Anthropic 实现**。Messages API + `tool_choice=any`，错误归一化，`_extract_tool_call()`。tool 名解析复用基类 `LLMClient._resolve_name()`。 |
-| [nlu/providers/openai_provider.py](nlu/providers/openai_provider.py) | **OpenAI 实现**。Chat Completions + `tool_choice=required`，解析 JSON arguments，tool 名解析同样复用基类。 |
+| [nlu/providers/anthropic_provider.py](nlu/providers/anthropic_provider.py) | **Anthropic 实现**。Messages API + `tool_choice=any`，错误归一化，`_extract_tool_call()`。tool 名解析复用基类 `LLMClient._resolve_name()`；有 `context` 时拼进 system prompt 辅助指代消解（修订 56）。 |
+| [nlu/providers/openai_provider.py](nlu/providers/openai_provider.py) | **OpenAI 实现**。Chat Completions + `tool_choice=required`，解析 JSON arguments，tool 名解析同样复用基类；`context` 注入 system prompt 同 Anthropic（修订 56）。 |
 
 ---
 
@@ -79,13 +79,14 @@
 
 | 文件 | 作用 |
 |---|---|
-| [executor/__init__.py](executor/__init__.py) | **执行分发器**。`Executor`（按意图类型分发）、`ExecutionResult` 数据类、`load_user_apps()`。`from_config()` 合并 user_apps.yaml（config 优先）、按 allow_open_any_app 建 AppIndex。`execute()` 无论成败都写审计日志（JSON lines）。 |
+| [executor/__init__.py](executor/__init__.py) | **执行分发器**。`Executor`（按意图类型分发）、`ExecutionResult` 数据类（含 `enter_dictation` 标志，修订 56）、`load_user_apps()`。`from_config()` 合并 user_apps.yaml（config 优先）、按 allow_open_any_app 建 AppIndex。`execute()` 无论成败都写审计日志（JSON lines）；`EnterDictationIntent` 走轻量分支置 `enter_dictation=True`，交主循环切听写模式（修订 56）。 |
 | [executor/whitelist.py](executor/whitelist.py) | **白名单校验**。`Whitelist` 校验 apps/commands/paths。`get_app_path()`、`get_command()`、`is_path_allowed()`（resolve + is_relative_to，空=拒绝）。`CommandEntry`（列表形式命令 + dangerous 标记）。 |
 | [executor/app_index.py](executor/app_index.py) | **已安装应用索引**（修订 15）。`AppIndex.build()` 扫开始菜单 .lnk + 注册表 App Paths，排除 uninstall/卸载。`resolve()` 确定性匹配（精确→唯一子串→歧义/未找到），不做相似度猜测。 |
 | [executor/app_control.py](executor/app_control.py) | **开关应用**。`open_app()`：白名单别名→索引→拒绝（os.startfile）；`close_app()`：仅认白名单、需二次确认、按 exe 名 psutil 终止进程。 |
 | [executor/system_query.py](executor/system_query.py) | **系统状态查询**。`query()` 用 psutil 查内存/磁盘/CPU；磁盘支持指定盘符或全部可读分区；CPU 用 interval=1。 |
 | [executor/file_ops.py](executor/file_ops.py) | **文件操作**。`open_file()`：`_resolve_path()` 三策略（完整路径 / 位置关键词+文件名 / 裸文件名搜索），白名单校验后 os.startfile。位置关键词：桌面/文档/下载。 |
 | [executor/shell_runner.py](executor/shell_runner.py) | **白名单命令执行**。`run()`：查白名单命令、dangerous→需确认、subprocess `shell=False`（禁任意拼接）、30s 超时、输出截断 500 字。 |
+| [executor/text_input.py](executor/text_input.py) | **听写文本注入**（修订 56）。`inject_text(text) -> int` 用 ctypes `SendInput` + `KEYEVENTF_UNICODE` 逐字符打字、返回注入字符数；**只发字面字符**，跳过控制字符（<0x20，含回车/Tab）与 BMP 外字符（§6 安全边界，无法凭自身提交/执行）；非 Windows 抛 `TextInputError` 优雅降级。懒加载 `_get_send_input()` 便于测试注入。 |
 
 ---
 
@@ -120,10 +121,13 @@
 |---|---|
 | [core/__init__.py](core/__init__.py) | 导出 MainLoop / MainLoopError / InterruptCoordinator / LoopState / PendingConfirmation / State。 |
 | [core/state.py](core/state.py) | **状态机定义**。`State` 枚举（IDLE/LISTEN/ASR/EXECUTE/TTS/AWAIT_CONFIRM）、`LoopState` 容器（当前状态、pending、rounds、exit_requested）、`PendingConfirmation`（二次确认上下文）。 |
-| [core/event_loop.py](core/event_loop.py) | **主循环核心**。`MainLoop` 把五个阶段串成状态机：`_phase_listen`/`_phase_asr`/`_phase_execute`/`_phase_tts`/`_phase_await_confirm`。同步调用用 `to_thread` 包装。TTS 阶段并发跑打断监听。二次确认、退出时序（修订 14：exit_requested 延迟到"再见"播完才置位）、打断取消退出（修订 13）、打断事件审计日志。`from_config_file()` 叠加本地覆盖。 |
+| [core/event_loop.py](core/event_loop.py) | **主循环核心**。`MainLoop` 把五个阶段串成状态机：`_phase_listen`/`_phase_asr`/`_phase_execute`/`_phase_tts`/`_phase_await_confirm`。同步调用用 `to_thread` 包装。TTS 阶段并发跑打断监听。二次确认、退出时序（修订 14：exit_requested 延迟到"再见"播完才置位）、打断取消退出（修订 13）、打断事件审计日志。`from_config_file()` 叠加本地覆盖。修订 56 接线：唤醒词前缀过滤 + 听写模式（`_handle_dictation` 注入 + 隐私脱敏审计）+ 多轮上下文（`_last_context` / `_build_context_summary`）+ 各阶段延迟度量埋点。 |
 | [core/interrupt_coordinator.py](core/interrupt_coordinator.py) | **打断协调器**（Step 7）。TTS 期间 `monitor()` 并发监听音频队列，`process_chunk_interrupt` 判定打断→立即 `player.stop()`。`drain_queue()` 清空带 TTS 泄漏的残留音频块，避免回 LISTEN 后误触发。 |
 | [core/local_settings.py](core/local_settings.py) | **本地覆盖读写**（修订 19/23）。读写 voxctl.local.yaml，`apply_local_overrides()` 把 llm/asr/tts 叠进 config、把 api_key 注入环境变量（intent_parser 读取路径不变）。`effective_*_settings()` 给 GUI 展示生效值。 |
 | [core/logger.py](core/logger.py) | **共用日志配置**（修订 25 真正实现）。`configure_root_logging(log_path, file_level, console_level, max_bytes, backup_count)`：建 logs 目录 + RotatingFileHandler(UTF-8) + windowless-safe StreamHandler（`sys.stdout` 为 None 时跳过，修订 19）。main.py（voxctl.log/DEBUG）与 webui/gui.py（voxctl-gui.log/INFO）各传参调用，消除此前两处重复逻辑。审计日志 actions.log 是另一条独立路径，不走这里。 |
+| [core/factory.py](core/factory.py) | **MainLoop 构造工厂**（修订 35 从 event_loop 拆出）。`create_from_config_file()` / `create_from_config()` 从 config 实例化所有子模块（recorder/vad/asr/parser/executor/tts/player + 插件注册器 + 修订 56 的唤醒词/听写/多轮/度量配置）并注入 MainLoop。 |
+| [core/phrase_match.py](core/phrase_match.py) | **文本匹配纯函数**（修订 56）。`normalize()`（NFKC + 去标点空白 + 小写）、`match_wake_prefix(text, phrases)`（唤醒词前缀匹配，把归一化切点映射回原文剥离）、`match_exit_phrase(text, phrases)`（听写退出短语等值或包含匹配）。纯函数无副作用，供 event_loop 唤醒/听写过滤调用。 |
+| [core/audit.py](core/audit.py) | **审计日志写入器**（§6 强制，executor 与 event_loop 共用）。`log_action()` / `log_interrupt_event()`（修订 56 加 `interrupt_latency_ms`）/ `log_metrics()`（修订 56：每轮各阶段延迟写 `event="metrics"` 行）。UTF-8 JSON lines 追加写 logs/actions.log。 |
 
 ---
 
@@ -168,6 +172,9 @@
 | [test_system_shortcuts.py](tests/unit/test_system_shortcuts.py) | 系统快捷插件（10 例，修订 55）：LockWorkStation 调用、截图组合键逆序、非法/缺失、降级、异常兜底 + 真实加载。 |
 | [test_datetime_query.py](tests/unit/test_datetime_query.py) | 时间日期插件（23 例，修订 55）：time/date/both、边界时刻（整点/凌晨/中午/周日）、无效 field、异常兜底 + 真实加载。 |
 | [test_power_status.py](tests/unit/test_power_status.py) | 电池状态插件（9 例，修订 55）：充电/未充电/百分比取整/无电池/异常兜底 + 真实加载。 |
+| [test_phrase_match.py](tests/unit/test_phrase_match.py) | 唤醒词/听写退出文本匹配纯函数（27 例，修订 56）：normalize、唤醒前缀命中/剥离/未命中、退出短语等值与包含匹配、切点映射回原文。 |
+| [test_text_input.py](tests/unit/test_text_input.py) | 听写文本注入 SendInput（11 例，修订 56）：逐字符注入计数、控制字符/BMP 外跳过、非 Windows 降级抛 TextInputError。 |
+| [test_rev56_features.py](tests/unit/test_rev56_features.py) | 修订 56 接线集成（22 例）：enter_dictation 意图/schema/executor/TTS 模板、唤醒词过滤、听写注入与隐私脱敏、多轮上下文透传/摘要更新、度量埋点写审计行。 |
 
 ### acceptance/ — 验收脚本（需真实设备/网络，手动运行）
 

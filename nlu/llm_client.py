@@ -60,12 +60,16 @@ class LLMClient(abc.ABC):
     """
 
     @abc.abstractmethod
-    def parse_intent(self, text: str, schema: dict) -> dict:
+    def parse_intent(self, text: str, schema: dict, context: Optional[str] = None) -> dict:
         """把用户文本解析为结构化意图 dict。
 
         Args:
             text: 用户说的话（ASR 转文字后的原始文本，可能含标点、语气词）
             schema: 由 `nlu.schema.build_intent_schema()` 生成的意图工具规格
+            context: 多轮上下文提示（修订 56），如"上一条指令：打开了 记事本"。
+                非空时 provider 把它并入 system 提示，辅助 LLM 做指代消解
+                （"关闭它"→上一条的目标）；仍只用于指代解析，不放松结构化输出约束。
+                None = 无上下文（每句独立，旧行为）。
 
         Returns:
             形如 {"intent": "open_app", "app_name": "chrome"} 的 dict，

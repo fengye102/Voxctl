@@ -108,7 +108,7 @@ def _make_parser_from_sequence(intents: list) -> MagicMock:
     """parser.parse 按调用顺序依次返回 intents 列表中的意图。"""
     it = iter(intents)
     p = MagicMock()
-    p.parse = MagicMock(side_effect=lambda text: next(it))
+    p.parse = MagicMock(side_effect=lambda text, context=None: next(it))
     p.close = MagicMock()
     return p
 

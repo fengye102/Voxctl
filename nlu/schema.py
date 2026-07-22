@@ -25,6 +25,7 @@ class IntentType(str, Enum):
     OPEN_FILE = "open_file"
     RUN_COMMAND = "run_command"
     EXIT_PROGRAM = "exit_program"
+    ENTER_DICTATION = "enter_dictation"
     CONFIRM = "confirm"
     CANCEL = "cancel"
     UNKNOWN = "unknown"
@@ -81,6 +82,12 @@ class ExitProgramIntent(BaseModel):
     intent: Literal["exit_program"] = "exit_program"
 
 
+class EnterDictationIntent(BaseModel):
+    """进入听写模式（修订 56，§4）。此后识别文本直接注入光标窗口，说"退出听写"结束。"""
+
+    intent: Literal["enter_dictation"] = "enter_dictation"
+
+
 class ConfirmIntent(BaseModel):
     """对二次确认问题的肯定回答（是/确定/对/好）。业务层根据上下文决定是否消费。"""
 
@@ -117,6 +124,7 @@ ParsedIntent = Annotated[
         OpenFileIntent,
         RunCommandIntent,
         ExitProgramIntent,
+        EnterDictationIntent,
         ConfirmIntent,
         CancelIntent,
         UnknownIntent,
@@ -184,6 +192,13 @@ _INTENT_TOOL_SPECS: List[dict] = [
         "description": "退出本语音助手程序。用户说'退出程序'、'关闭助手'、'再见'、'退出' 等明确终止本助手意图时选此工具。"
         "注意区别于 close_app（关闭其他应用）。",
         "model": ExitProgramIntent,
+    },
+    {
+        "name": "enter_dictation",
+        "description": "进入听写模式。用户说'进入听写'、'开始听写'、'我要听写'、'打字模式'等，"
+        "表示接下来要把说的话直接当文字输入到当前光标处（不是执行指令）时选此工具。"
+        "只负责'进入'这个模式；退出由模式内的关键词处理，不需要工具。",
+        "model": EnterDictationIntent,
     },
     {
         "name": "confirm",

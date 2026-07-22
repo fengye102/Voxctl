@@ -138,18 +138,21 @@ class IntentParser:
         return cls(client, plugin_tool_specs, plugin_intent_names)
 
     # ------------------------------------------------------------------
-    def parse(self, text: str) -> AnyIntent:
+    def parse(self, text: str, context: Optional[str] = None) -> AnyIntent:
         """解析用户文本为具体意图模型。
 
         对空输入直接返回 unknown，不去打 LLM——ASR 转出空文本是常见情况
         （CLAUDE.md 第 4 节：ASR 空文本走 unknown 兜底流程）。
+
+        context（修订 56，多轮上下文）：上一条成功指令的摘要，非空时透传给
+        provider 辅助指代消解（"关闭它"）；None = 每句独立（旧行为）。
         """
         stripped = (text or "").strip()
         if not stripped:
             return UnknownIntent(reason="empty input")
 
         try:
-            raw = self._client.parse_intent(stripped, self._schema)
+            raw = self._client.parse_intent(stripped, self._schema, context)
         except LLMTimeoutError as exc:
             _LOG.warning("LLM timeout: %s", exc)
             return UnknownIntent(reason=f"timeout: {exc}")

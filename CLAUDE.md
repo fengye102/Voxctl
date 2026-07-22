@@ -212,6 +212,7 @@ Voxctl/
 │   ├── system_query.py        # 查内存/磁盘/CPU 等状态
 │   ├── file_ops.py            # 文件操作
 │   ├── shell_runner.py        # 执行自定义命令
+│   ├── text_input.py          # 听写文本注入（修订 56）：ctypes SendInput + KEYEVENTF_UNICODE 逐字符打字，只发字面字符（禁回车/Tab/修饰键，§6），非 Windows 降级
 │   └── whitelist.py           # 白名单校验 + 二次确认逻辑
 │
 ├── plugins/                    # 插件机制（修订 42）：扩展意图类型，不扩展权限
@@ -235,13 +236,14 @@ Voxctl/
 │
 ├── core/
 │   ├── __init__.py
-│   ├── event_loop.py           # 主循环：状态机分发 + 各 _phase_* 阶段处理 + 打断处理（不改 state.py）
+│   ├── event_loop.py           # 主循环：状态机分发 + 各 _phase_* 阶段处理 + 打断处理；唤醒词过滤 + 听写模式 + 多轮上下文 + 度量埋点接线（修订 56）
 │   ├── factory.py              # MainLoop 构造工厂：create_from_config_file / create_from_config，从 config 实例化所有子模块（修订 35 从 event_loop.py 拆出）
+│   ├── phrase_match.py         # 纯函数文本匹配（修订 56）：normalize + match_wake_prefix（唤醒词剥离）+ match_exit_phrase（听写退出）
 │   ├── interrupt_coordinator.py # 状态协调器：打断信号判定与分发
 │   ├── state.py                 # 全局状态机（空闲/监听/识别/执行/播报/等待确认）
 │   ├── logger.py               # 共用日志配置 configure_root_logging()（修订 25）：建 logs 目录 + RotatingFileHandler(UTF-8) + windowless-safe StreamHandler
 │   ├── local_settings.py       # voxctl.local.yaml 读写 + LLM/ASR/TTS 覆盖注入 + API key keyring 存储（修订 19/23/34）
-│   ├── audit.py                # 审计日志写入：执行动作 + 打断事件 JSON lines（§6 强制，executor/event_loop 共用）
+│   ├── audit.py                # 审计日志写入：执行动作 + 打断事件 + 阶段延迟 metrics（log_metrics，修订 56）JSON lines（§6 强制，executor/event_loop 共用）
 │   └── version.py              # 版本信息：__version__ + get_version_info()（版本号+git commit hash，修订 39）
 │
 ├── webui/                      # 本地管理控制台（修订 24：只剩 PyWebView GUI 版，浏览器版已删）
@@ -283,6 +285,9 @@ Voxctl/
 │   │   ├── test_system_shortcuts.py # 系统快捷插件单元测试（10 例，修订 55）
 │   │   ├── test_datetime_query.py  # 时间日期插件单元测试（23 例，修订 55）
 │   │   ├── test_power_status.py    # 电池状态插件单元测试（9 例，修订 55）
+│   │   ├── test_phrase_match.py    # 唤醒词/听写退出文本匹配纯函数（27 例，修订 56）
+│   │   ├── test_text_input.py      # 听写文本注入 SendInput（11 例，控制字符跳过 + 非 Windows 降级，修订 56）
+│   │   ├── test_rev56_features.py  # 唤醒词/听写/多轮/度量/enter_dictation 接线集成（22 例，修订 56）
 │   │   └── test_mainloop_integration.py  # MainLoop 集成冒烟测试（5 例，驱动真实 _main_loop while 循环，修订 39）
 │   ├── acceptance/             # 验收脚本：需真实设备/网络/LLM，手动运行
 │   │   ├── __init__.py
@@ -348,6 +353,25 @@ ui:
 plugins:
   enabled: true                   # 插件机制总开关（修订 42）；false = 不扫描 plugins/，LLM schema 不含插件意图
 
+wake_word:                        # 唤醒词（修订 56）：默认关，开启后每条指令须以唤醒词开头才处理
+  enabled: false                  # false = 纯 VAD 激活（旧行为，默认）；true = 须唤醒词前缀
+  phrases:                        # 唤醒词短语（归一化后前缀匹配，命中即剥离，剩余部分作指令）
+    - 小助手
+    - 你好小助手
+  ack_on_bare: true               # 只说唤醒词无后续指令时，是否轻应一声"在"
+
+dictation:                        # 听写模式（修订 56）：说"进入听写"把后续识别文本直接注入当前光标
+  exit_phrases:                   # 听写中说这些词退出（关键词匹配，不走 LLM，低延迟）
+    - 退出听写
+    - 停止听写
+    - 结束听写
+
+context:                          # 多轮上下文（修订 56）：让"关闭它"能指代上一条指令的目标
+  multi_turn: true                # true = 把上一条成功指令摘要传给 LLM 辅助指代消解；false = 每句独立（旧 §4 行为）
+
+metrics:                          # 度量埋点（修订 56）：把各阶段延迟写进审计日志，用于验证 §7 指标
+  enabled: true                   # true = 每轮写一条 metrics 审计行（asr/intent/exec/说完→播报 毫秒 + 打断响应）
+
 whitelist:
   apps:
     chrome: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
@@ -382,8 +406,6 @@ whitelist:
 
 - **工业级声学回声消除（AEC）**：MVP 用简化阈值判断打断，不追求完美区分"用户说话"和"播报声音泄漏"，误判（漏判或误触发）在 MVP 阶段可接受，作为独立的后续优化项。**实测依据（2026-07-13）**：外放场景下 TTS 播报声被麦克风拾取后 silero-vad 概率稳定在 0.88-0.97，调阈值方案已证明无效（见 §8.4 实测结论），外放全双工打断在 MVP 阶段标记为已知限制，建议用耳机模式验证核心功能。
 - **更精确的设备类型识别**：MVP 用设备名关键词匹配，检测不准时依赖用户手动覆盖。更可靠的方式（如检测音频接口类型、蓝牙协议判断）留到后续优化。
-- **多轮对话上下文**：每次指令独立处理，不记住上一句说了什么。打断后重新说的内容视为全新指令，不延续被打断前的上下文。
-- **唤醒词**（如"你好小助手"）：MVP 用纯 VAD 激活，不用唤醒词。
 - **GPU 加速**：CPU 模式够用就行。
 - **多说话人区分**：不做声纹识别，也不做"是不是同一个人打断"的判断。
 - **图形界面**：语音是唯一的主交互通道，不做语音流程相关的 GUI。修订 16 松动一条口子：允许一个**本地管理控制台**（`webui/`）用于别名注册、解析测试和审计日志查看。**修订 19 再松一条**：把该控制台做成 **PyWebView 原生窗口**（`webui/gui.py`，无浏览器 / 无 localhost，走 js_api 桥）作为 GUI exe 的"应用正脸"——除维护功能外，新增**改 LLM 配置**（base_url / model / api_key，写入 `voxctl.local.yaml`）和**启停语音交互**（子进程方式）。**修订 24**：删掉早期的浏览器版（`webui/server.py` 的 stdlib http 服务 + `webui.bat` + `build_console.bat`），只保留 PyWebView GUI 版——两版长期并存是重复维护，GUI 版已完全覆盖浏览器版功能；GUI 复用的底层（`ConsoleState` / 别名读写 / `validate_alias` / frozen 路径解析）从 server.py 内联进 `webui/gui.py`。定位仍是配置 / 生命周期 / 维护工具，**不替代语音**：控制电脑仍只走语音 + 二次确认，语音主循环不依赖 GUI（GUI 只负责拉起 / 杀掉语音子进程），不跑 GUI 语音功能完全不受影响。系统托盘状态图标仍属延后项。
@@ -394,6 +416,18 @@ whitelist:
 - ASR 识别失败或空文本 → TTS 提示"没听清，请再说一次"，不进入执行流程。
 - LLM 解析不出明确意图 → TTS 提示"不确定你想做什么"，不猜测执行。
 - 执行报错（如应用不存在）→ TTS 播报具体错误，不静默失败。
+
+### 已落地的后续增强（原属延后项，修订 56 起启用）
+
+以下四项在 MVP 稳定后作为增强落地。前两项曾列在"明确延后"，本次显式提升为可用能力；**改动遵循"先改文档再改代码"，其中多轮上下文推翻了两条原 MVP 边界，特此记录取舍**。
+
+1. **唤醒词（`wake_word`，默认关，opt-in）**：`wake_word.enabled=true` 时，每条指令须以唤醒词短语开头才处理——归一化后前缀匹配，命中即剥离唤醒词、剩余部分作为指令继续走 ASR→意图链路；未命中则静默丢弃（不 TTS、不执行），直接压低常开监听的误触发。只说唤醒词无后续指令时按 `ack_on_bare` 轻应一声"在"。**默认 `false` 保留纯 VAD 激活的旧行为**，不影响既有用户。匹配是确定性前缀匹配，不做模糊/相似度放行。实现落点：`_phase_asr` 拿到文本后、意图解析前的过滤器（`core/phrase_match.py` 纯函数）。
+
+2. **听写模式（`dictation`，新增能力面）**：说"进入听写"进入听写模式，此后识别到的文本**直接注入当前光标所在窗口**（ctypes `SendInput` + `KEYEVENTF_UNICODE` 逐字符打字），不再走意图解析；说 `dictation.exit_phrases`（"退出听写"等，关键词匹配、不走 LLM 以降延迟）退出。**安全边界（§6 强制）**：听写只注入字面字符，**绝不注入回车/Tab/修饰键组合**，因此无法凭自身提交表单或执行命令（要执行仍须退出听写、走正常语音指令 + 白名单 + 二次确认）；能力经"进入听写"显式开启，非常驻；仅 Windows 可用，其它平台优雅降级。听写进出、注入字符数写审计日志。
+
+3. **多轮上下文（`context.multi_turn`，⚠ 推翻原 MVP 边界）**：让"关闭它""再打开一个"能指代上一条指令的目标。实现：`event_loop` 维护"上一条成功指令摘要"（如"已打开：记事本"），下一轮解析时作为上下文提示传给 LLM（`LLMClient.parse_intent(text, schema, context=...)`，两个 provider 各自注入），由 LLM 做指代消解，**业务层不做规则消解、不猜测**；LLM 仍只输出结构化数据（tool use / function calling），上下文只影响指代解析、不放松"不生成自然语言"约束。**推翻的两条原边界**：原 §4"每次指令独立处理，不记住上一句" 与 "打断后重新说的内容视为全新指令" 不再成立——上下文在会话内持续，跨轮/跨打断保留（退出程序时清空）。`context.multi_turn=false` 可退回旧的"每句独立"行为。取舍：指代消解提升自然度，代价是上一句错误可能影响下一句解析，故保留开关且默认可关。
+
+4. **度量埋点（`metrics`，纯加法，不碰边界）**：每轮把各阶段延迟（ASR / 意图解析 / 执行 / "说完→开始播报" 毫秒，以及打断响应毫秒）写进审计日志 `logs/actions.log`（`core/audit.py` 的 `log_metrics`，`time.perf_counter` 计时），用于量化验证 §7 的延迟类指标，替代此前的人工感觉。不改变任何交互行为。
 
 ---
 
@@ -492,6 +526,16 @@ whitelist:
 - 执行未经白名单校验的任意 shell 命令拼接（防止 LLM 解析出错或被提示注入时执行任意代码）
 - 网络请求类的破坏性操作（如任意 URL 的 POST/DELETE 请求）不在本项目范围内，不做
 
+### 听写模式安全边界（修订 56，强制）
+
+听写模式（§4）把识别文本注入当前光标窗口，是新增的能力面，边界必须写死：
+
+- **只注入字面字符，绝不注入回车 / Tab / 修饰键组合**：`SendInput` 只发 `KEYEVENTF_UNICODE` 的字符事件，不发 VK_RETURN / VK_TAB / Ctrl-Alt 之类。因此听写**无法凭自身提交表单、发送消息或在终端执行命令**——最坏结果是把一段文字打进某个输入框，用户一眼可见、可删。要真正"执行"仍须退出听写、走正常语音指令 + 白名单 + 二次确认，听写**不构成绕过白名单的旁路**。
+- **经显式意图开启，非常驻**：只有说"进入听写"才进模式，说退出短语才回到指令模式；不做后台常开注入。
+- **注入目标不可控是已知取舍**：注入进哪个窗口取决于当前系统焦点，助手不检测/不限制焦点窗口（那需要窗口枚举 + 白名单，超出范围）。用户需自行确保焦点在预期输入框——这与用户自己用键盘打字的风险等价，不额外放大。
+- 仅 Windows 可用（`SendInput`），其它平台优雅降级为失败提示。
+- 审计日志记录听写进入 / 退出 / 每次注入的字符数（不记明文内容，避免把用户听写的隐私文本落盘）。
+
 ### 打断与执行状态的边界（强制，全双工特有）
 
 - 打断能取消的状态：**播报中**、**等待二次确认中**。用户在这两个状态下说话并被判定为打断，视为用户主动放弃当前交互，对应操作按"未确认/未执行"处理。
@@ -524,6 +568,10 @@ whitelist:
 | 打断成功率（外放模式） | 用户明确尝试打断，成功率 > 90%（简化阈值方案下外放场景的合理目标，非 100%） |
 | 输出模式检测准确率 | 常见设备（品牌耳机、笔记本内置扬声器、外接音箱）识别正确率 > 80%，识别失败时手动覆盖必须生效 |
 | 危险操作边界 | 打断发生在"等待二次确认"阶段，操作 100% 不执行；打断发生在"已执行中"阶段，操作 100% 不受影响继续完成 |
+| 唤醒词过滤（开启时） | `wake_word.enabled=true` 时，无唤醒词前缀的指令 100% 不进入意图解析/执行；含唤醒词前缀的指令正常处理 |
+| 听写注入安全 | 听写模式 100% 不注入回车/Tab/修饰键；退出短语 100% 能退出听写回到指令模式 |
+| 多轮指代（开启时） | `context.multi_turn=true` 时，"关闭它"类指代能正确解析到上一条成功指令的目标（固定场景）；关闭开关退回每句独立 |
+| 度量埋点 | `metrics.enabled=true` 时每轮写一条 metrics 审计行，字段齐全（asr/intent/exec/说完→播报 毫秒），可据此核对 §7 延迟指标 |
 
 每个 Step 完成后跑对应测试，不要等到 Step 6 才一起测。
 

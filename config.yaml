@@ -103,6 +103,35 @@ plugins:
   # 插件机制总开关（修订 42）：true = 扫描 plugins/ 加载自定义意图；false = 不加载
   enabled: true
 
+wake_word:
+  # 唤醒词（修订 56，默认关）：true = 每条指令须以唤醒词开头才处理，压低常开监听误触发
+  #   false = 纯 VAD 激活（旧行为，默认，不影响既有使用）
+  enabled: false
+  # 唤醒词短语（归一化后前缀匹配，命中即剥离，剩余部分作为指令继续解析）
+  phrases:
+    - 小助手
+    - 你好小助手
+  # 只说唤醒词、无后续指令时，是否轻应一声"在"
+  ack_on_bare: true
+
+dictation:
+  # 听写模式（修订 56）：说"进入听写"后，识别文本直接注入当前光标窗口（只打字面字符，
+  # 绝不发回车/Tab/修饰键，§6 安全边界）；说下列任一短语退出（关键词匹配，不走 LLM）
+  exit_phrases:
+    - 退出听写
+    - 停止听写
+    - 结束听写
+
+context:
+  # 多轮上下文（修订 56）：true = 把上一条成功指令摘要传给 LLM，辅助"关闭它"类指代消解
+  #   false = 每句独立处理（旧 §4 行为）。仅影响指代解析，不放松结构化输出约束
+  multi_turn: true
+
+metrics:
+  # 度量埋点（修订 56）：true = 每轮把各阶段延迟（asr/intent/exec/说完→播报 毫秒）
+  # 写进 logs/actions.log（event="metrics"），用于量化核对 §7 延迟指标
+  enabled: true
+
 whitelist:
   # 打开应用放开开关（CLAUDE.md §6 修订 15）：
   #   true  = 打开任意已安装应用（开始菜单 + App Paths 索引，apps 别名表优先）

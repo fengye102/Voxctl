@@ -87,6 +87,12 @@ def create_from_config(config: dict) -> "MainLoop":
     player = AudioPlayer()
     tts_engine = build_tts_engine(config.get("tts", {}), player)
 
+    # 修订 56：唤醒词 / 听写 / 多轮上下文 / 度量埋点配置
+    wake_cfg = config.get("wake_word", {}) or {}
+    dictation_cfg = config.get("dictation", {}) or {}
+    context_cfg = config.get("context", {}) or {}
+    metrics_cfg = config.get("metrics", {}) or {}
+
     return MainLoop(
         recorder=recorder,
         vad=vad,
@@ -97,6 +103,12 @@ def create_from_config(config: dict) -> "MainLoop":
         player=player,
         output_mode=output_mode,
         speaker_interrupt_enabled=speaker_interrupt_enabled,
+        wake_word_enabled=bool(wake_cfg.get("enabled", False)),
+        wake_word_phrases=list(wake_cfg.get("phrases", []) or []),
+        wake_word_ack=bool(wake_cfg.get("ack_on_bare", True)),
+        dictation_exit_phrases=list(dictation_cfg.get("exit_phrases", []) or []),
+        multi_turn=bool(context_cfg.get("multi_turn", True)),
+        metrics_enabled=bool(metrics_cfg.get("enabled", True)),
     )
 
 

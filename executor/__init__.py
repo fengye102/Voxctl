@@ -41,6 +41,7 @@ from nlu.schema import (
     CancelIntent,
     CloseAppIntent,
     ConfirmIntent,
+    EnterDictationIntent,
     ExitProgramIntent,
     OpenAppIntent,
     OpenFileIntent,
@@ -94,6 +95,9 @@ class ExecutionResult:
     action_type: str
     needs_confirmation: bool = False
     should_exit: bool = False
+    # 修订 56：进入听写模式信号。executor 置位、event_loop 在播完确认音后翻转模式
+    # （与 should_exit 同构：不在此处改状态，只传信号，避免时序坑）。
+    enter_dictation: bool = False
     payload: dict = field(default_factory=dict)
     error: Optional[str] = None
 
@@ -231,6 +235,16 @@ class Executor:
                 action_type="exit_program",
                 should_exit=True,
                 payload={"message": "退出语音助手"},
+            )
+
+        if isinstance(intent, EnterDictationIntent):
+            # 进入听写非破坏性（§6 修订 56：听写只注入字面字符），不需二次确认。
+            # executor 只置 enter_dictation 信号，event_loop 在播完确认音后翻转模式。
+            return ExecutionResult(
+                success=True,
+                action_type="enter_dictation",
+                enter_dictation=True,
+                payload={"message": "进入听写模式，说的话会被打字输入；说\"退出听写\"结束"},
             )
 
         if isinstance(intent, ConfirmIntent):

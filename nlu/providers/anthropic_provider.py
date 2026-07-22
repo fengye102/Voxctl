@@ -57,15 +57,19 @@ class AnthropicClient(LLMClient):
         self._client = anthropic.Anthropic(**client_kwargs)
 
     # ------------------------------------------------------------------
-    def parse_intent(self, text: str, schema: dict) -> dict:
+    def parse_intent(self, text: str, schema: dict, context: Optional[str] = None) -> dict:
         tools = self._build_tools(schema)
         allowed_names = {t["name"] for t in tools}
+        system = _SYSTEM_PROMPT
+        if context:
+            # 多轮上下文（修订 56）：并入 system，仅辅助指代消解，不放松结构化约束。
+            system = f"{_SYSTEM_PROMPT}\n\n[上一轮参考，仅用于消解'它/这个'等指代]\n{context}"
 
         try:
             response = self._client.messages.create(
                 model=self._model,
                 max_tokens=self._max_tokens,
-                system=_SYSTEM_PROMPT,
+                system=system,
                 # tool_choice=any 强制模型必须选一个工具，杜绝纯文本回复的可能。
                 tool_choice={"type": "any"},
                 tools=tools,

@@ -983,7 +983,7 @@ class TestMainLoopIntegration(unittest.IsolatedAsyncioTestCase):
         # parser 第一次返回 close，第二次返回 confirm
         parse_results = iter([close_intent, confirm_intent])
         parser = _make_parser()
-        parser.parse = MagicMock(side_effect=lambda t: next(parse_results))
+        parser.parse = MagicMock(side_effect=lambda t, context=None: next(parse_results))
 
         vad = _make_vad(segment_on_call=0)
         tts = _make_tts()
@@ -1192,7 +1192,7 @@ class TestMainLoopWhileLoop(unittest.IsolatedAsyncioTestCase):
         asr = _make_asr(text="打开记事本")
 
         # parser 第一次抛异常，第二次返回 exit
-        def parse_side_effect(text):
+        def parse_side_effect(text, context=None):
             call_count["n"] += 1
             if call_count["n"] == 1:
                 raise RuntimeError("LLM boom")
@@ -1253,7 +1253,7 @@ class TestMainLoopWhileLoop(unittest.IsolatedAsyncioTestCase):
         asr = _make_asr(text="指令")
 
         parser = _make_parser()
-        parser.parse = MagicMock(side_effect=lambda t: next(intents))
+        parser.parse = MagicMock(side_effect=lambda t, context=None: next(intents))
 
         executor = _make_executor()
         executor.execute = MagicMock(side_effect=lambda i, t, c: next(results))
