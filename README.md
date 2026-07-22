@@ -97,6 +97,11 @@
 | [plugins/base.py](plugins/base.py) | `PluginSpec` 数据类 + `PluginError`/`PluginLoadError` 异常 + 插件开发约束说明。 |
 | [plugins/volume_control.py](plugins/volume_control.py) | **音量/静音插件**（修订 51）。intent `volume_control`，ctypes `keybd_event` 发虚拟音量键，无 pycaw/subprocess，非 Windows 优雅降级。 |
 | [plugins/clipboard_read.py](plugins/clipboard_read.py) | **剪贴板读取插件**（修订 53）。intent `clipboard_read`，ctypes 读 CF_UNICODETEXT 供 TTS 朗读；**只读**，绝不执行/打开内容；空/超长/非 Windows 均有兜底。 |
+| [plugins/media_control.py](plugins/media_control.py) | **媒体控制插件**（修订 55）。intent `media_control`，ctypes 发媒体键（播放暂停/停止/上一首/下一首），单键 tap，非 Windows 降级。 |
+| [plugins/window_control.py](plugins/window_control.py) | **窗口/桌面插件**（修订 55）。intent `window_control`，ctypes 组合键（显示桌面 Win+D/最小化 Win+M/恢复 Win+Shift+M/切换窗口 Alt+Tab），down 顺序 + up 逆序。 |
+| [plugins/system_shortcuts.py](plugins/system_shortcuts.py) | **系统快捷插件**（修订 55）。intent `system_shortcuts`，锁屏走 `user32.LockWorkStation()`、截图走 Win+Shift+S，均非破坏性（`dangerous=False`）。 |
+| [plugins/datetime_query.py](plugins/datetime_query.py) | **时间日期查询插件**（修订 55）。intent `datetime_query`，`datetime` 纯只读，12 小时制报时 + 中文星期报日期，TTS 模板，跨平台无按键。 |
+| [plugins/power_status.py](plugins/power_status.py) | **电池状态插件**（修订 55）。intent `power_status`，`psutil.sensors_battery()` 查电量/充电状态，无电池台式机友好降级。 |
 
 ---
 
@@ -158,6 +163,11 @@
 | [test_hotkey.py](tests/unit/test_hotkey.py) | 热键字符串解析纯函数（修订 33）。 |
 | [test_volume_plugin.py](tests/unit/test_volume_plugin.py) | 音量插件（修订 51）：steps 夹紧、mute/up/down、非 Windows 降级、经真实 PluginRegistry 加载。 |
 | [test_clipboard_plugin.py](tests/unit/test_clipboard_plugin.py) | 剪贴板插件（16 例，修订 53）：读取/空/超长截断/忽略参数/非 Windows 降级/异常兜底 + 真实加载与调度。 |
+| [test_media_control.py](tests/unit/test_media_control.py) | 媒体控制插件（10 例，修订 55）：每个动作按键序列、非法/缺失 action、非 Windows 降级、异常兜底 + 真实加载。 |
+| [test_window_control.py](tests/unit/test_window_control.py) | 窗口/桌面插件（11 例，修订 55）：组合键 down 顺序/up 逆序校验、非法/缺失、非 Windows 降级 + 真实加载。 |
+| [test_system_shortcuts.py](tests/unit/test_system_shortcuts.py) | 系统快捷插件（10 例，修订 55）：LockWorkStation 调用、截图组合键逆序、非法/缺失、降级、异常兜底 + 真实加载。 |
+| [test_datetime_query.py](tests/unit/test_datetime_query.py) | 时间日期插件（23 例，修订 55）：time/date/both、边界时刻（整点/凌晨/中午/周日）、无效 field、异常兜底 + 真实加载。 |
+| [test_power_status.py](tests/unit/test_power_status.py) | 电池状态插件（9 例，修订 55）：充电/未充电/百分比取整/无电池/异常兜底 + 真实加载。 |
 
 ### acceptance/ — 验收脚本（需真实设备/网络，手动运行）
 

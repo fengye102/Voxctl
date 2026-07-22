@@ -218,7 +218,12 @@ Voxctl/
 │   ├── __init__.py             # PluginRegistry：扫描/加载/校验插件，提供 dispatch + tool specs 合并（跳过 base.py 不当插件加载，修订 51）
 │   ├── base.py                 # PluginSpec 数据类 + PluginError 异常 + 插件开发约束说明
 │   ├── volume_control.py       # 音量/静音插件（修订 51）：ctypes keybd_event 发虚拟音量键，无 pycaw/subprocess
-│   └── clipboard_read.py       # 剪贴板读取插件（修订 53）：ctypes 读 CF_UNICODETEXT 供 TTS 朗读，只读、绝不执行/打开内容
+│   ├── clipboard_read.py       # 剪贴板读取插件（修订 53）：ctypes 读 CF_UNICODETEXT 供 TTS 朗读，只读、绝不执行/打开内容
+│   ├── media_control.py        # 媒体控制插件（修订 55）：ctypes keybd_event 发媒体键（播放暂停/停止/上下一首）
+│   ├── window_control.py       # 窗口/桌面插件（修订 55）：ctypes 组合键（显示桌面/最小化/恢复/切换窗口）
+│   ├── system_shortcuts.py     # 系统快捷插件（修订 55）：锁屏 LockWorkStation + 截图 Win+Shift+S，均非破坏性
+│   ├── datetime_query.py       # 时间日期查询插件（修订 55）：datetime 纯只读，TTS 模板报时/报日期，跨平台
+│   └── power_status.py         # 电池状态插件（修订 55）：psutil.sensors_battery 查电量/充电，无电池台式机友好降级
 │
 ├── tts/
 │   ├── __init__.py
@@ -273,6 +278,11 @@ Voxctl/
 │   │   ├── test_plugins.py         # 插件机制单元测试（24 例，修订 42）
 │   │   ├── test_volume_plugin.py   # 音量插件单元测试（修订 51）
 │   │   ├── test_clipboard_plugin.py # 剪贴板插件单元测试（16 例，修订 53）
+│   │   ├── test_media_control.py   # 媒体控制插件单元测试（10 例，修订 55）
+│   │   ├── test_window_control.py  # 窗口/桌面插件单元测试（11 例，修订 55）
+│   │   ├── test_system_shortcuts.py # 系统快捷插件单元测试（10 例，修订 55）
+│   │   ├── test_datetime_query.py  # 时间日期插件单元测试（23 例，修订 55）
+│   │   ├── test_power_status.py    # 电池状态插件单元测试（9 例，修订 55）
 │   │   └── test_mainloop_integration.py  # MainLoop 集成冒烟测试（5 例，驱动真实 _main_loop while 循环，修订 39）
 │   ├── acceptance/             # 验收脚本：需真实设备/网络/LLM，手动运行
 │   │   ├── __init__.py
