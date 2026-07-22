@@ -217,7 +217,8 @@ Voxctl/
 ├── plugins/                    # 插件机制（修订 42）：扩展意图类型，不扩展权限
 │   ├── __init__.py             # PluginRegistry：扫描/加载/校验插件，提供 dispatch + tool specs 合并（跳过 base.py 不当插件加载，修订 51）
 │   ├── base.py                 # PluginSpec 数据类 + PluginError 异常 + 插件开发约束说明
-│   └── volume_control.py       # 音量/静音插件（修订 51）：ctypes keybd_event 发虚拟音量键，无 pycaw/subprocess
+│   ├── volume_control.py       # 音量/静音插件（修订 51）：ctypes keybd_event 发虚拟音量键，无 pycaw/subprocess
+│   └── clipboard_read.py       # 剪贴板读取插件（修订 53）：ctypes 读 CF_UNICODETEXT 供 TTS 朗读，只读、绝不执行/打开内容
 │
 ├── tts/
 │   ├── __init__.py
@@ -240,12 +241,12 @@ Voxctl/
 │
 ├── webui/                      # 本地管理控制台（修订 24：只剩 PyWebView GUI 版，浏览器版已删）
 │   ├── __init__.py
-│   ├── gui.py                  # PyWebView 原生窗口 + js_api；含 ConsoleState / 别名读写 / validate_alias；run_gui() 起热键监听（修订 26/33/50）
+│   ├── gui.py                  # PyWebView 原生窗口 + js_api；含 ConsoleState / 别名读写 / validate_alias / get_audio_mode（外放诚实提示，修订 52）；run_gui() 起热键监听（修订 26/33/50/52）
 │   └── static/
 │       └── index.html          # 控制台前端（单文件，无构建步骤，离线自足）
 │
-├── build_voice.bat             # 语音主程序 exe 打包脚本（PyInstaller onedir → dist/voxctl/，修订 18）
-├── build_gui.bat               # GUI 控制台 exe 打包脚本（onedir --windowed，修订 19）
+├── build_voice.bat             # 语音主程序 exe 打包脚本（PyInstaller onedir → dist/voxctl/，修订 18；随包拷 plugins/*.py，修订 54）
+├── build_gui.bat               # GUI 控制台 exe 打包脚本（onedir --windowed，修订 19；随包拷 plugins/*.py，修订 54）
 │
 ├── user_apps.yaml              # webui 维护的用户别名表（机器写入，gitignore；启动时合并进 whitelist.apps，config.yaml 优先）
 ├── voxctl.local.yaml           # GUI 维护的本地覆盖：llm/asr/tts（机器写入，gitignore，含 api_key 明文，勿分享，修订 19/23）
@@ -270,6 +271,8 @@ Voxctl/
 │   │   ├── test_event_loop.py      # 真实 MainLoop 单元测试（41 例，含投机 ASR）
 │   │   ├── test_vad_adaptive.py    # VAD 自适应阈值单元测试（15 例）
 │   │   ├── test_plugins.py         # 插件机制单元测试（24 例，修订 42）
+│   │   ├── test_volume_plugin.py   # 音量插件单元测试（修订 51）
+│   │   ├── test_clipboard_plugin.py # 剪贴板插件单元测试（16 例，修订 53）
 │   │   └── test_mainloop_integration.py  # MainLoop 集成冒烟测试（5 例，驱动真实 _main_loop while 循环，修订 39）
 │   ├── acceptance/             # 验收脚本：需真实设备/网络/LLM，手动运行
 │   │   ├── __init__.py
@@ -542,6 +545,7 @@ whitelist:
   - 真正的解决方案是声学回声消除（AEC），MVP 不做，作为后续独立优化项
 - **实测结论（2026-07-13 live 验证）**：调阈值方案在外放场景下**已证明无效**。干净静音对照测试显示，TTS 播报声音被麦克风拾取后，silero-vad 输出的语音概率稳定在 **0.88-0.97**，远超任何合理阈值——这不是卡在临界点的抖动，是 VAD 模型非常确信地误判为人声。把 `interrupt_threshold_speaker` 从 0.8 调到 0.85 + `speech_confirm_frames` 从 2 调到 3 仍无法过滤；继续调高会牺牲正常打断的灵敏度，失去全双工意义。
   - **MVP 阶段结论**：外放场景下全双工打断不可用，属已知限制。建议外放场景用耳机模式验证核心功能，或接受外放模式下"播报期间无法打断"的退化体验。
+  - **诚实提示（修订 52，迭代 C-A）**：既然外放限制是已知取舍，就在界面上讲清楚，别让用户以为坏了。语音子进程启动横幅（`core/event_loop.py`，修订 51）+ GUI 控制台语音 tab 顶部「全双工状态」卡（`webui/gui.py` `get_audio_mode()` + `index.html`，修订 52）都会显示当前耳机/外放 + 打断是否可用；外放不可打断用琥珀色（属预期限制，非红色错误），并提示"要边播边打断请插耳机"。判定逻辑与主循环一致：耳机始终可打断，外放仅 `vad.speaker_interrupt_enabled=true` 才可。
   - **后续方向**：要么做真正的 AEC（WebRTC AEC3 / SpeexDSP），要么退化成"播报期间不监听打断"的单向模式（牺牲全双工）。两者都不在 MVP 范围。
 
 ### 8.5 输出设备类型自动检测不可靠
@@ -581,6 +585,7 @@ whitelist:
   - **config.yaml / user_apps.yaml / logs 不打进 exe**：与 webui 同理（config 要用户可改、user_apps 要可写、logs 运行时写）。`main.py` frozen 模式 `os.chdir` 到 exe 所在目录，这些文件按相对路径读写；`build_voice.bat` 打包后把 `config.yaml` 拷到 `dist/voxctl/` 旁边，目标机改这一份即可。
   - **API key 仍只从环境变量读（§6 铁律，不因"独立分发"松动）**：拷到目标机后必须在目标机 `setx ANTHROPIC_API_KEY <key>` 设好，否则启动即报 key 缺失。绝不把 key 写进 config 明文。
   - **console 模式（非 windowed）**：语音助手要在窗口里显示识别文本/日志，保留控制台窗口，与原 PowerShell 运行体验一致。
+  - **插件随 exe 分发（修订 54）**：`plugins/` 下的 `.py` 是**运行时磁盘扫描**加载（`PluginRegistry.load_from_directory` 走 `Path("plugins").glob("*.py")`，读 exe 目录旁的源文件，不是冻结模块），所以 `--hidden-import plugins.xxx` **对它无效**。正确做法是打包后把 `plugins\*.py` 拷到 `dist\voxctl\plugins\`（与 config.yaml 同区处理，`build_voice.bat` / `build_gui.bat` 均已加）。同时**移除了修订 48 S4 强制把分发版 `plugins.enabled` 改成 false 的逻辑**——分发版现默认继承 config.yaml 的 `plugins.enabled=true`，音量/剪贴板插件在打包版可用；安全上仍有加载前 AST 扫描（§6 修订 47）兜底恶意插件文件。
 - **多 provider 的额外坑**：`nlu/providers/` 下两个 provider 文件只要都在代码里被 import（哪怕运行时只用一个），PyInstaller 静态分析就会把 `anthropic` 和 `openai` 两个 SDK 全部打进 exe，不会因为 `config.yaml` 里 `provider: anthropic` 就自动裁掉没用到的 `openai` 相关依赖。届时如果确定用户只会用固定的一种 provider，考虑在打包脚本层面用条件 import 或单独的打包配置排除掉另一个 SDK；如果两种都要保留给用户切换，接受体积代价即可，不用为了省这点体积牺牲切换灵活性。这个决策留到真正打包时再做，MVP 阶段不用管。
 
 ---

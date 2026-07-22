@@ -72,16 +72,13 @@ if errorlevel 1 (
 rem config.yaml is user-editable and NOT bundled; place a copy next to the exe.
 copy /y config.yaml dist\voxctl\config.yaml >nul
 
-rem 修订 48 S4：分发版默认禁用插件（用户自行开启）。
-rem 开发模式仓库版 config.yaml 的 plugins.enabled=true；分发给第三方时默认关闭，
-rem 让用户显式启用更安全（AST 扫描是深度防御非绝对屏障）。
-rem 正则只匹配 plugins 块紧接的注释 + enabled 行，不影响其他 enabled 字段。
-powershell -NoProfile -Command "$f='dist\voxctl\config.yaml'; $c=[IO.File]::ReadAllText($f); $c = $c -replace '(?m)(^plugins:\r?\n\s*#[^\r\n]*\r?\n\s*enabled:\s*)true', '$1false'; [IO.File]::WriteAllText($f, $c)"
-if errorlevel 1 (
-    echo [build] WARNING: failed to disable plugins in dist config, leaving as-is
-) else (
-    echo [build] plugins.enabled set to false in dist config (rev 48 S4)
-)
+rem Plugins are loaded at runtime by scanning disk files (PluginRegistry globs
+rem plugins\*.py next to the exe), NOT from frozen modules, so --hidden-import
+rem cannot deliver them. Ship the plugins\ dir alongside the exe. Only .py files
+rem (no __pycache__). Dist config keeps plugins.enabled=true from config.yaml;
+rem plugin loading has AST safety scanning (rev 47) as defense in depth.
+if not exist dist\voxctl\plugins mkdir dist\voxctl\plugins
+copy /y plugins\*.py dist\voxctl\plugins\ >nul
 
 echo.
 echo [build] done: dist\voxctl\voxctl.exe

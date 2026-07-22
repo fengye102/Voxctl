@@ -40,6 +40,7 @@ else:
     if str(_PROJECT_ROOT) not in sys.path:
         sys.path.insert(0, str(_PROJECT_ROOT))
 
+from audio.output_mode import OutputMode, detect_output_mode
 from executor import Executor, USER_APPS_FILE, load_user_apps
 from executor.app_index import AppIndex, MatchStatus
 from executor.whitelist import Whitelist
@@ -329,6 +330,50 @@ class Api:
             OpenAppIntent(app_name=name), raw_text=f"[gui] 打开 {name}",
         )
         return {"ok": result.success, "error": result.error, "payload": result.payload}
+
+    # ---- 输出模式 / 打断可用性诚实提示（修订 52，迭代 C-A）----------------------
+    def get_audio_mode(self) -> dict:
+        """返回当前有效输出模式 + 打断是否可用，供 GUI 诚实提示。
+
+        逻辑与语音主循环一致（core/event_loop.py 启动横幅）：
+        - 输出模式：读 config.audio.output_mode，auto 则复用 detect_output_mode()
+          自动检测（失败保守默认 SPEAKER，见 CLAUDE.md §8.5）
+        - 打断可用性：耳机模式始终可打断；外放模式仅当 vad.speaker_interrupt_enabled
+          为真才可打断（外放 TTS 泄漏使阈值方案无效，默认关，见 §8.4）
+
+        纯展示：不含 api_key / 绝对路径 / 破坏性入口。
+        """
+        audio_cfg = _load_config_section("audio")
+        vad_cfg = _load_config_section("vad")
+        override = str(audio_cfg.get("output_mode", "auto") or "auto").strip().lower()
+        if override not in ("auto", "headphone", "speaker"):
+            override = "auto"
+        speaker_interrupt = bool(vad_cfg.get("speaker_interrupt_enabled", False))
+
+        try:
+            mode = detect_output_mode(override)
+        except Exception as exc:  # noqa: BLE001
+            _LOG.warning("get_audio_mode: detect failed (%s), defaulting to SPEAKER", exc)
+            mode = OutputMode.SPEAKER
+
+        is_headphone = mode == OutputMode.HEADPHONE
+        interrupt_available = is_headphone or speaker_interrupt
+        mode_cn = "耳机" if is_headphone else "外放"
+        if is_headphone:
+            hint = "当前耳机模式，播报期间可以随时开口打断。"
+        elif speaker_interrupt:
+            hint = "当前外放模式，已手动开启打断（可能误触发）。追求稳定全双工请插耳机。"
+        else:
+            hint = "当前外放模式，播报期间无法打断（请等播完）。要边播边打断，请插耳机。"
+
+        return {
+            "mode": mode.value,
+            "mode_cn": mode_cn,
+            "interrupt_available": interrupt_available,
+            "speaker_interrupt_enabled": speaker_interrupt,
+            "auto_detected": override == "auto",
+            "hint": hint,
+        }
 
     # ---- 设置（LLM + ASR + TTS，写 voxctl.local.yaml，修订 19 / 23 / 46）--------
     def get_settings(self) -> dict:

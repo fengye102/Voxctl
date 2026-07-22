@@ -394,6 +394,22 @@ td.path { font-family: var(--mono); font-size: 12px; color: var(--ink-dim); word
 }
 .toast.err { border-left-color: var(--danger); }
 @keyframes toastIn { from { opacity: 0; transform: translateX(30px); } }
+/* 全双工状态卡（修订 52，迭代 C-A）：耳机可打断=绿；外放不可打断=琥珀（非红，属预期限制非错误） */
+.mode-card {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 12px 14px; border-radius: 12px;
+  border: 1px solid var(--line); background: #F8FAFC;
+}
+.mode-badge {
+  flex: none; font-size: 13px; font-weight: 700; color: #fff;
+  padding: 4px 12px; border-radius: 999px; background: var(--ink-dim);
+}
+.mode-hint { font-size: 13px; color: var(--ink-mid); line-height: 1.5; }
+.mode-card.ok { border-color: rgba(5,150,105,.35); background: rgba(5,150,105,.08); }
+.mode-card.ok .mode-badge { background: var(--ok); }
+.mode-card.warn { border-color: rgba(217,119,6,.4); background: rgba(217,119,6,.09); }
+.mode-card.warn .mode-badge { background: #D97706; }
+.mode-card.warn .mode-hint { color: #92400E; }
 </style>
 </head>
 <body>
@@ -470,6 +486,17 @@ td.path { font-family: var(--mono); font-size: 12px; color: var(--ink-dim); word
         <h2>语音控制</h2>
         <p>启动或停止语音助手子进程；改了配置或别名后，停止再启动即生效。</p>
       </div>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>全双工状态</h2>
+          <span class="hint">输出模式 · 打断</span>
+        </div>
+        <div class="mode-card" id="audio-mode-box">
+          <span class="mode-badge" id="audio-mode-badge">检测中…</span>
+          <span class="mode-hint" id="audio-mode-hint">正在检测当前输出设备…</span>
+        </div>
+      </section>
 
       <section class="panel">
         <div class="panel-head">
@@ -789,6 +816,25 @@ function toast(msg, isErr = false, ms = 3200) {
 // PyWebView js_api 桥（无 http，无 fetch）。所有调用走 window.pywebview.api.<method>()。
 const API = () => (window.pywebview && window.pywebview.api) || null;
 
+/* ── 全双工状态（修订 52，迭代 C-A）：诚实提示当前输出模式 + 打断可用性 ── */
+async function loadAudioMode() {
+  const api = API(); if (!api) return;
+  const box = $('audio-mode-box'), badge = $('audio-mode-badge'), hint = $('audio-mode-hint');
+  if (!box) return;
+  try {
+    const m = await api.get_audio_mode();
+    const label = m.mode_cn + (m.interrupt_available ? ' · 可打断' : ' · 不可打断');
+    badge.textContent = label;
+    hint.textContent = m.hint || '';
+    box.classList.remove('ok', 'warn');
+    box.classList.add(m.interrupt_available ? 'ok' : 'warn');
+  } catch (e) {
+    badge.textContent = '未知';
+    hint.textContent = '无法检测输出模式。';
+    box.classList.remove('ok', 'warn');
+  }
+}
+
 /* ── 状态 + 别名表 ── */
 async function refreshState() {
   const api = API(); if (!api) return;
@@ -1093,6 +1139,7 @@ function initTabs() {
       page.classList.add('active');
       requestAnimationFrame(() => requestAnimationFrame(() => page.classList.add('visible')));
       if (b.dataset.tab === 'voice') startVoicePoll(); else stopVoicePoll();
+      if (b.dataset.tab === 'voice') loadAudioMode();
       if (b.dataset.tab === 'llm') loadSettings();
       if (b.dataset.tab === 'log') { refreshLog(); startLogPoll(); } else stopLogPoll();
     };
@@ -1120,6 +1167,7 @@ function init() {
   refreshLog();
   loadSettings();
   startVoicePoll();   // 默认页是「语音控制」，开机即轮询状态
+  loadAudioMode();    // 默认页显示输出模式 / 打断可用性（修订 52）
 }
 if (API()) init();  // 桥可能已就绪
 window.addEventListener('pywebviewready', init);

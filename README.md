@@ -33,8 +33,8 @@
 | [app.py](app.py) | **统一入口**（修订 19）。默认 `python app.py` 起 PyWebView GUI 控制台；`python app.py --voice` 委托 `main.main()` 跑语音。单 exe 靠 `--voice` 参数复用两种角色。含 frozen 下 stdout 重定向（修订 28：语音角色接回 fd1 让崩溃 traceback 落进 voxctl-voice.out 供 GUI 回读，GUI 角色扔 devnull）、chdir 到 exe 目录。 |
 | [main.py](main.py) | **语音主循环入口**。日志配置调 `core/logger.py` 的 `configure_root_logging()`（修订 25：控制台 INFO + 轮转文件 DEBUG，UTF-8，windowed 下跳过控制台 handler）、frozen chdir、`--config` 参数、构造 `MainLoop.from_config_file()` 跑 `asyncio.run`、捕获 Ctrl+C。 |
 | [run.bat](run.bat) | 一键启动语音主程序：设 UTF-8 代码页 → 激活 venv → `python main.py`。日常开发用，用户双击即可。 |
-| [build_voice.bat](build_voice.bat) | 语音主程序 exe 打包脚本（PyInstaller onedir → `dist/voxctl/`，console 模式）。显式 collect ctranslate2/faster_whisper/onnxruntime/opencc/sounddevice/anthropic/openai，exclude torch，`--add-data` 打包 silero_vad.onnx。 |
-| [build_gui.bat](build_gui.bat) | GUI 控制台 exe 打包脚本（onedir `--windowed` 无黑窗）。在 build_voice 基础上加 PyWebView 原生栈（webview/clr_loader/pythonnet/bottle）+ `--hidden-import main`（供 `--voice` 子进程角色）+ 打包 index.html 到 `webui_static`。约 271MB。 |
+| [build_voice.bat](build_voice.bat) | 语音主程序 exe 打包脚本（PyInstaller onedir → `dist/voxctl/`，console 模式）。显式 collect ctranslate2/faster_whisper/onnxruntime/opencc/sounddevice/anthropic/openai，exclude torch，`--add-data` 打包 silero_vad.onnx。打包后随包拷 `plugins\*.py` 到 `dist\voxctl\plugins\`，分发版默认启用插件（修订 54）。 |
+| [build_gui.bat](build_gui.bat) | GUI 控制台 exe 打包脚本（onedir `--windowed` 无黑窗）。在 build_voice 基础上加 PyWebView 原生栈（webview/clr_loader/pythonnet/bottle）+ `--hidden-import main`（供 `--voice` 子进程角色）+ 打包 index.html 到 `webui_static`。随包拷 `plugins\*.py`（修订 54）。约 271MB。 |
 | [tests/acceptance/test_gui_smoke.py](tests/acceptance/test_gui_smoke.py) | 源码模式 GUI 窗口**冒烟测试**（修订 19）。开 pywebview 窗口→探测 js_api 桥→检查 11 个方法存在→自动关闭。非交互。 |
 
 ---
@@ -89,6 +89,17 @@
 
 ---
 
+## plugins/ — 插件机制（扩展意图，不扩展权限，修订 42）
+
+| 文件 | 作用 |
+|---|---|
+| [plugins/__init__.py](plugins/__init__.py) | **PluginRegistry**：启动时 `load_from_directory()` 扫 `plugins/*.py`（跳过 `_` 开头与 `base.py`），加载前 AST 安全扫描拦截 subprocess/os.system 等危险调用（修订 47），校验 `PLUGIN_SPEC` 后注册；`tool_specs()` 合并进 LLM 意图工具集、`dispatch()` 分发到插件 handler（异常兜底不崩主循环）。 |
+| [plugins/base.py](plugins/base.py) | `PluginSpec` 数据类 + `PluginError`/`PluginLoadError` 异常 + 插件开发约束说明。 |
+| [plugins/volume_control.py](plugins/volume_control.py) | **音量/静音插件**（修订 51）。intent `volume_control`，ctypes `keybd_event` 发虚拟音量键，无 pycaw/subprocess，非 Windows 优雅降级。 |
+| [plugins/clipboard_read.py](plugins/clipboard_read.py) | **剪贴板读取插件**（修订 53）。intent `clipboard_read`，ctypes 读 CF_UNICODETEXT 供 TTS 朗读；**只读**，绝不执行/打开内容；空/超长/非 Windows 均有兜底。 |
+
+---
+
 ## tts/ — 文字转语音
 
 | 文件 | 作用 |
@@ -127,7 +138,7 @@
 | 文件 | 作用 |
 |---|---|
 | [webui/__init__.py](webui/__init__.py) | 包标记（一行 docstring）。 |
-| [webui/gui.py](webui/gui.py) | **GUI 控制台主体**（修订 19/24/33）。PyWebView 原生窗口 + `Api` js_api 桥（11+ 个方法）：别名增删/解析/打开、审计日志、LLM/ASR/TTS 设置读写、语音子进程启停、热键设置。修订 24 把已删的 server.py 共享底层（`ConsoleState`/别名读写/`validate_alias`/frozen 路径解析）内联进来。`run_gui()` 起全局热键监听（修订 33，修订 50 起浮窗已删）。**只暴露非破坏性操作**；语音启停含四道失败反馈防线（修订 20：预检 key、重定向 stderr、探活、崩溃回读）。 |
+| [webui/gui.py](webui/gui.py) | **GUI 控制台主体**（修订 19/24/33/52）。PyWebView 原生窗口 + `Api` js_api 桥（11+ 个方法）：别名增删/解析/打开、审计日志、LLM/ASR/TTS 设置读写、语音子进程启停、热键设置、`get_audio_mode()`（外放/耳机 + 打断可用性诚实提示，修订 52）。修订 24 把已删的 server.py 共享底层（`ConsoleState`/别名读写/`validate_alias`/frozen 路径解析）内联进来。`run_gui()` 起全局热键监听（修订 33，修订 50 起浮窗已删）。**只暴露非破坏性操作**；语音启停含四道失败反馈防线（修订 20：预检 key、重定向 stderr、探活、崩溃回读）。 |
 | [webui/static/index.html](webui/static/index.html) | **控制台前端**（单文件，无构建步骤）。修订 22 亮色毛玻璃视觉，**离线自足**（无 CDN/webfont/图片，纯 CSS 渐变）。左侧导航（语音控制/大模型配置/应用别名/审计日志）+ 右侧卡片。经 `window.pywebview.api.*` 调后端。 |
 
 ---
@@ -145,6 +156,8 @@
 | [test_stability.py](tests/unit/test_stability.py) | 稳定性（复用 PureStateMachineLoop，30 轮 0 崩溃 + RSS 增长检查 + 状态收敛）。 |
 | [test_webui.py](tests/unit/test_webui.py) | webui 纯函数（validate_alias / user_apps 合并优先级，修订 24 import 改自 webui.gui）。 |
 | [test_hotkey.py](tests/unit/test_hotkey.py) | 热键字符串解析纯函数（修订 33）。 |
+| [test_volume_plugin.py](tests/unit/test_volume_plugin.py) | 音量插件（修订 51）：steps 夹紧、mute/up/down、非 Windows 降级、经真实 PluginRegistry 加载。 |
+| [test_clipboard_plugin.py](tests/unit/test_clipboard_plugin.py) | 剪贴板插件（16 例，修订 53）：读取/空/超长截断/忽略参数/非 Windows 降级/异常兜底 + 真实加载与调度。 |
 
 ### acceptance/ — 验收脚本（需真实设备/网络，手动运行）
 
