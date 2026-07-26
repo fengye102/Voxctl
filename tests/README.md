@@ -10,10 +10,11 @@ pytest tests/unit/
 
 **跨层依赖备注**：`test_stability.py`（unit）依赖 `test_main_loop.py`（acceptance）的 `PureStateMachineLoop` 和 `test_interrupt.py`（unit）的 `MockVAD`/`MockPlayer`/`MockTTS`/`MainLoopForTest`。这是有意为之的复用，非误分类——`PureStateMachineLoop` 是纯 mock 状态机（无外部依赖），定义在 acceptance 文件里只是因为该文件同时承载 `--live` 端到端模式。
 
-## acceptance/ — 验收脚本（手动运行）
+## acceptance/ — 验收脚本（默认手动运行）
 
 对应 CLAUDE.md §5 各 Step 的验收标准，需要真实麦克风、LLM API、音频设备或网络。
-用 `python -m tests.acceptance.<脚本名>` 单独运行，不应被 CI 默认收集。
+用 `python -m tests.acceptance.<脚本名>` 单独运行，不被 pytest 默认收集；唯一例外是
+`test_tts.py --templates-only` 纯函数模式，由 CI 显式运行。
 
 ```powershell
 python -m tests.acceptance.test_recorder_vad --save-dir ./test_audio   # Step 1
@@ -25,9 +26,9 @@ python -m tests.acceptance.test_main_loop                               # Step 6
 python -m tests.acceptance.test_gui_smoke                               # GUI 冒烟（需 pywebview 窗口）
 ```
 
-**包含可独立提取到 CI 的纯函数/mock 部分**：
-- `test_main_loop.py` 的 `PureStateMachineLoop` 默认 `--mock` 模式无需外部依赖
-- `test_tts.py` 的 `--templates-only` 模式是纯函数测试，不需要网络
+**无需真实设备的部分**：
+- `test_main_loop.py` 的 `PureStateMachineLoop` 可在未设置 API key 时由默认入口运行，但默认入口检测到 key 会走真实组件，因此不进 CI
+- `test_tts.py` 的 `--templates-only` 模式是纯函数测试，不需要网络，已进入 CI
 
 ## tools/ — 诊断/探针脚本
 

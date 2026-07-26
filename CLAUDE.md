@@ -298,7 +298,7 @@ Voxctl/
 │   │   ├── test_text_input.py      # 听写文本注入 SendInput（11 例，控制字符跳过 + 非 Windows 降级，修订 56）
 │   │   ├── test_rev56_features.py  # 唤醒词/听写/多轮/度量/enter_dictation 接线集成（22 例，修订 56）
 │   │   └── test_mainloop_integration.py  # MainLoop 集成冒烟测试（5 例，驱动真实 _main_loop while 循环，修订 39）
-│   ├── acceptance/             # 验收脚本：需真实设备/网络/LLM，手动运行
+│   ├── acceptance/             # 验收脚本默认手动运行；TTS --templates-only 纯函数模式进入 CI
 │   │   ├── __init__.py
 │   │   ├── test_recorder_vad.py    # Step 1：录音闭环 + VAD（需麦克风，交互式）
 │   │   ├── test_asr.py             # Step 2：ASR 准确率（需麦克风或 wav 文件）

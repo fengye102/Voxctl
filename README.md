@@ -25,7 +25,7 @@
 | [user_apps.yaml](user_apps.yaml) | GUI 维护的**用户别名表**（应用名→exe/.lnk 路径，机器写入，gitignore）。启动时合并进 `whitelist.apps`，config.yaml 同名优先。独立成文件是为了不破坏 config.yaml 的注释。（当前工作区可能尚未生成。） |
 | [requirements.txt](requirements.txt) | 依赖清单（宽松基线版本）。pydantic/anthropic/openai/numpy/sounddevice/onnxruntime/faster-whisper/opencc/psutil/edge-tts/pyttsx3/av(PyAV)/PyYAML/pywebview/keyring。注明修订 21 起用 onnxruntime 跑 VAD、去掉 torch。 |
 | [pyproject.toml](pyproject.toml) | pytest 与 Ruff 项目配置：测试收集范围、Python 路径和静态检查规则。 |
-| [.github/workflows/ci.yml](.github/workflows/ci.yml) | GitHub Actions CI：安装依赖并执行自动化检查。 |
+| [.github/workflows/ci.yml](.github/workflows/ci.yml) | GitHub Actions CI：安装依赖，执行 Ruff、全量单元测试和离线 TTS 模板验收。 |
 | [.gitignore](.gitignore) | 忽略规则。venv、logs、test_audio、打包产物、`voxctl.local.yaml` / `user_apps.yaml`（机器写入的本地状态）。 |
 
 ### 入口 / 启动脚本
@@ -169,7 +169,7 @@
 
 ## tests/ — 测试与诊断脚本
 
-分三层组织。默认 `pytest` 只收集 `tests/unit/`（`pyproject.toml` 配置），验收脚本和诊断工具需手动运行。详见 [tests/README.md](tests/README.md)。
+分三层组织。默认 `pytest` 只收集 `tests/unit/`（`pyproject.toml` 配置）；验收脚本默认手动运行，其中 TTS `--templates-only` 纯函数模式由 CI 显式执行。诊断工具仍需手动运行。详见 [tests/README.md](tests/README.md)。
 
 [tests/__init__.py](tests/__init__.py) 是测试包标记。
 
@@ -208,7 +208,7 @@
 | [test_known_folder_plugin.py](tests/unit/test_known_folder_plugin.py) | 固定文件夹白名单、Known Folder 解析/打开失败、平台降级与注册器加载。 |
 | [test_brightness_plugin.py](tests/unit/test_brightness_plugin.py) | 亮度查询/设置/增减、参数边界、WMI 原生调用链、平台/硬件降级与注册器加载。 |
 
-### acceptance/ — 验收脚本（需真实设备/网络，手动运行）
+### acceptance/ — 验收脚本（默认需真实设备/网络，手动运行）
 
 | 文件 | 作用 |
 |---|---|
