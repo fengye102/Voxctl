@@ -16,8 +16,25 @@ class Setter:
         self.InstanceName = name
         self.calls = []
 
-    def WmiSetBrightness(self, **kwargs):
-        self.calls.append(kwargs)
+    def Methods_(self, name):
+        assert name == "WmiSetBrightness"
+        properties = {
+            "Timeout": SimpleNamespace(Value=None),
+            "Brightness": SimpleNamespace(Value=None),
+        }
+        collection = SimpleNamespace(Item=properties.__getitem__)
+        params = SimpleNamespace(Properties_=collection)
+        in_parameters = SimpleNamespace(SpawnInstance_=lambda: params)
+        return SimpleNamespace(InParameters=in_parameters)
+
+    def ExecMethod_(self, name, params):
+        assert name == "WmiSetBrightness"
+        self.calls.append(
+            {
+                "Timeout": params.Properties_.Item("Timeout").Value,
+                "Brightness": params.Properties_.Item("Brightness").Value,
+            }
+        )
 
 
 def _session(monkeypatch, levels=(52,), writable=True):
@@ -55,7 +72,7 @@ def test_set(monkeypatch):
     result = handle_brightness_control({"action": "set", "value": 65}, False)
     assert result.success is True
     assert result.payload["message"] == "已将屏幕亮度设为65%"
-    assert setters[0].calls == [{"Brightness": 65, "Timeout": 1}]
+    assert setters[0].calls == [{"Brightness": 65, "Timeout": 0}]
 
 
 @pytest.mark.parametrize(
@@ -75,7 +92,7 @@ def test_relative_adjustment(monkeypatch, action, current, step, target):
     result = handle_brightness_control(params, False)
     assert result.success is True
     assert result.payload["levels"] == [target]
-    assert setters[0].calls == [{"Brightness": target, "Timeout": 1}]
+    assert setters[0].calls == [{"Brightness": target, "Timeout": 0}]
 
 
 @pytest.mark.parametrize("value", [None, -1, 101, 1.5, True, "50"])
@@ -144,10 +161,10 @@ def test_wmi_failure(monkeypatch):
 def test_setter_failure(monkeypatch):
     setters = _session(monkeypatch)
 
-    def fail(**kwargs):
+    def fail(name, params):
         raise OSError("write failed")
 
-    setters[0].WmiSetBrightness = fail
+    setters[0].ExecMethod_ = fail
     result = handle_brightness_control({"action": "down"}, False)
     assert result.success is False
     assert "write failed" in result.payload["message"]
