@@ -322,7 +322,9 @@ class TestFileOpsExtensionWhitelist(unittest.TestCase):
         """.lnk 指向 .txt → 允许打开（解析出 target 后按 target 扩展名校验）。"""
         import tempfile
         with tempfile.TemporaryDirectory() as tmpdir:
-            tmp = Path(tmpdir)
+            # resolve()：CI runner 的 %TEMP% 是 8.3 短路径（RUNNER~1），
+            # file_ops 内部会 resolve 成长路径再 startfile，不先归一会断言不等
+            tmp = Path(tmpdir).resolve()
             real_txt = tmp / "real.txt"
             real_txt.write_text("hi", encoding="utf-8")
             lnk = tmp / "doc_shortcut.lnk"

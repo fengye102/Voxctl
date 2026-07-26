@@ -211,7 +211,11 @@ class TTSEngine(BaseTTSEngine):
                     if chunk["type"] == "audio":
                         data = chunk["data"]
                         if data:
-                            os.write(write_fd, data)
+                            # os.write 是阻塞调用：管道缓冲区（Windows 约 8KB，
+                            # 仅容 ~1.3s MP3）写满时会卡死整个事件循环，而解码
+                            # 线程靠 run_coroutine_threadsafe 回投队列 put，循环
+                            # 一停就互相等死（5s 超时→截断播报），必须走线程池
+                            await asyncio.to_thread(os.write, write_fd, data)
             except Exception as exc:
                 _LOG.warning("[TTS] edge-tts feed error: %s", exc)
                 raise

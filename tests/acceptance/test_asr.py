@@ -79,7 +79,7 @@ def read_wav(path: Path) -> tuple[np.ndarray, int]:
 
 def run_offline(wav_dir: Path, model_size: str) -> None:
     import sys
-    sys.path.insert(0, str(Path(__file__).parent.parent))
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
     from asr import WhisperEngine
 
     wav_files = sorted(wav_dir.glob("*.wav"))
@@ -117,7 +117,7 @@ def run_offline(wav_dir: Path, model_size: str) -> None:
 
 async def run_live(device_index: Optional[int], model_size: str) -> None:
     import sys
-    sys.path.insert(0, str(Path(__file__).parent.parent))
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
     from audio.recorder import AudioRecorder, SAMPLE_RATE
     from audio.vad import VADProcessor, VADMode
     from asr import WhisperEngine

@@ -328,7 +328,7 @@ async def run_real_playback_tests() -> tuple[int, int]:
     """真实合成 + 播放验收，返回 (passed, total)。"""
     print("=== Part 2: 真实 TTS 合成 + 播放测试（需网络 + 音频设备）===")
 
-    config_path = Path(__file__).resolve().parent.parent / "config.yaml"
+    config_path = Path(__file__).resolve().parent.parent.parent / "config.yaml"
     with open(config_path, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
