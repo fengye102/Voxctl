@@ -81,6 +81,7 @@ pyinstaller --noconfirm --name voxctl ^
     --hidden-import nlu.providers.anthropic_provider ^
     --hidden-import nlu.providers.openai_provider ^
     --hidden-import asr.providers.openai_asr ^
+    --hidden-import asr.providers.openai_chat_asr ^
     --hidden-import tts.providers.openai_tts ^
     --hidden-import _cffi_backend ^
     --hidden-import pyttsx3 ^
