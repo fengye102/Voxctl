@@ -253,8 +253,8 @@ Voxctl/
 │   └── static/
 │       └── index.html          # 控制台前端（单文件，无构建步骤，离线自足）
 │
-├── build_voice.bat             # 语音主程序 exe 打包脚本（PyInstaller onedir → dist/voxctl/，修订 18；随包拷 plugins/*.py，修订 54）
-├── build_gui.bat               # GUI 控制台 exe 打包脚本（onedir --windowed，修订 19；随包拷 plugins/*.py，修订 54）
+├── build_voice.bat             # 语音主程序 exe 打包脚本；可用 VOXCTL_OFFLINE_MODEL_DIR opt-in 打入 Whisper（修订 60）
+├── build_gui.bat               # GUI 控制台 exe 打包脚本；同样支持离线模型 opt-in（修订 60）
 │
 ├── user_apps.yaml              # webui 维护的用户别名表（机器写入，gitignore；启动时合并进 whitelist.apps，config.yaml 优先）
 ├── voxctl.local.yaml           # GUI 维护的本地覆盖：llm/asr/tts（机器写入，gitignore，含 api_key 明文，勿分享，修订 19/23）
@@ -435,6 +435,8 @@ whitelist:
 
 6. **系统托盘状态（`ui.tray_enabled`）**：Windows 下用 stdlib `ctypes` 调 `Shell_NotifyIconW` 显示一个极简托盘图标，tooltip 随主循环阶段更新为“正在监听 / 正在识别 / 正在执行 / 正在播报 / 等待确认”；图标无菜单、无点击操作，不新增控制权限。关闭开关或非 Windows 时 no-op；程序退出必须删除图标。此功能不恢复修订 50 删除的悬浮窗，不引入 `pystray`/Pillow。
 
+7. **真离线 Whisper 分发（修订 60，构建时 opt-in）**：默认构建仍不携带约 460MB 的 `small` 模型，避免所有分发包无条件膨胀；需要离线包时，把 `VOXCTL_OFFLINE_MODEL_DIR` 指向一个已解析的 faster-whisper CTranslate2 模型目录（必须直接包含 `model.bin`、`config.json`、`tokenizer.json`、`vocabulary.txt`），再运行 `build_voice.bat` 或 `build_gui.bat`。脚本把目录打到固定的 PyInstaller `models/whisper`；冻结运行时 `WhisperEngine` 优先从 `sys._MEIPASS/models/whisper` 加载，存在即不访问 Hugging Face，不存在才保持原来的按模型名下载/缓存行为。固定目录避免 batch 脚本解析 YAML；离线目录中的模型版本由构建者负责与 `asr.model_size` 保持一致。构建脚本必须校验四个文件，不能产出“号称离线、实际缺权重”的包；不硬编码开发机缓存路径。
+
 ---
 
 ## 5. 分步开发计划
@@ -581,6 +583,7 @@ whitelist:
 | 度量埋点 | `metrics.enabled=true` 时每轮写一条 metrics 审计行，字段齐全（asr/intent/exec/说完→播报 毫秒），可据此核对 §7 延迟指标 |
 | 本地提醒 | 1～86400 秒的提醒能注册并在到期后经现有 TTS 播报；空文本/越界延迟 100% 拒绝；程序退出后不再触发 |
 | 系统托盘状态 | Windows 下启动后显示托盘图标，LISTEN/ASR/EXECUTE/TTS/AWAIT_CONFIRM 的 tooltip 与状态一致；退出后图标删除；关闭配置时不启动 |
+| 真离线 Whisper | 设置有效 `VOXCTL_OFFLINE_MODEL_DIR` 后构建产物含 `models/whisper` 且断网可加载；目录缺关键文件时构建立即失败；未设置时保持轻量联网首次下载行为 |
 
 每个 Step 完成后跑对应测试，不要等到 Step 6 才一起测。
 
@@ -648,7 +651,7 @@ whitelist:
 - **修订 18：语音主程序打包为独立 exe**（用户需求：拷到没装 Python 的电脑上跑），关键决策：
   - **只能 onedir，不能 onefile**：打包产物本体约 730MB（`_internal/` 里 torch_cpu.dll 291MB + ctranslate2.dll 57MB + onnxruntime 等；CPU torch，装 CUDA torch 会更大）。onefile 每次启动都要把这几百 MB 重新解压到临时目录，明显拖慢启动，不划算。onedir 产出 `dist/voxctl/voxctl.exe` + `_internal/` 文件夹，拷**整个文件夹**到目标机，启动秒级。
   - **native / data 依赖必须显式 collect**，漏一个运行时才炸：ctranslate2（native DLL）、faster_whisper、onnxruntime（native DLL，跑 VAD 的 `.onnx`）、opencc（转换字典）、sounddevice（PortAudio DLL）、anthropic/openai（tokenizer/证书数据）。两个 provider 用 `--hidden-import` 兜底（`build_client` 经抽象层选 provider，静态分析可能跟不到）。全部写在 `build_voice.bat` 里。**修订 21 起去掉 torch/silero_vad 的 collect，改 `--add-data audio\silero_vad.onnx` + `--exclude-module torch --exclude-module torchaudio`**——VAD 已改 onnxruntime 直跑 onnx（见 §2），torch 不再被任何代码 import，显式 exclude 防它经某条残留路径被静态分析拖回来（-470MB）。
-  - **whisper 模型不打进 exe，运行时下载**：small int8 权重 ~500MB，首次在新机器运行时从 HF 下载缓存到 `~/.cache/huggingface`——**目标机首次运行需联网**。要真离线可把模型目录 `--add-data` 进包、frozen 模式指向本地路径（+500MB），本次未做，留作增强项。
+  - **Whisper 模型默认不打进 exe，离线包显式 opt-in（修订 60）**：普通构建仍按模型名从 HF 首次下载并缓存；离线构建先设置 `VOXCTL_OFFLINE_MODEL_DIR=<已解析的 CTranslate2 模型目录>`，两个 build 脚本会校验关键文件并用 `--add-data` 打到固定目录 `models/whisper`。冻结运行时从 `sys._MEIPASS` 自动发现该目录，存在则直接传本地路径给 `WhisperModel`，目标机无需联网。当前 `small` snapshot 实际约 464MB，离线包体积相应增加；不直接打整个 HF hub（其中 blobs/snapshots 硬链接会重复计量）。
   - **config.yaml / user_apps.yaml / logs 不打进 exe**：与 webui 同理（config 要用户可改、user_apps 要可写、logs 运行时写）。`main.py` frozen 模式 `os.chdir` 到 exe 所在目录，这些文件按相对路径读写；`build_voice.bat` 打包后把 `config.yaml` 拷到 `dist/voxctl/` 旁边，目标机改这一份即可。
   - **API key 仍只从环境变量读（§6 铁律，不因"独立分发"松动）**：拷到目标机后必须在目标机 `setx ANTHROPIC_API_KEY <key>` 设好，否则启动即报 key 缺失。绝不把 key 写进 config 明文。
   - **console 模式（非 windowed）**：语音助手要在窗口里显示识别文本/日志，保留控制台窗口，与原 PowerShell 运行体验一致。

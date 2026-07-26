@@ -29,7 +29,9 @@
 from __future__ import annotations
 
 import logging
+import sys
 import time
+from pathlib import Path
 
 import numpy as np
 
@@ -37,18 +39,40 @@ import numpy as np
 # 这里 re-export 保持 `from asr.whisper_engine import ASRResult, ASRError` 等旧路径可用。
 from asr.asr_engine import (
     ASREngine,
-    ASRError,
+    ASRError,  # noqa: F401 - 保留旧导入路径兼容性
     ASRResult,
     ModelLoadError,
     TranscribeError,
     _DEFAULT_LOG_PROB_THRESHOLD,
     _DEFAULT_NO_SPEECH_THRESHOLD,
     apply_opencc,
-    finalize_result,
+    finalize_result,  # noqa: F401 - 保留旧导入路径兼容性
     load_opencc_converter,
 )
 
 _LOG = logging.getLogger(__name__)
+
+_BUNDLED_MODEL_FILES = (
+    "model.bin", "config.json", "tokenizer.json", "vocabulary.txt",
+)
+
+
+def find_bundled_model_dir(bundle_root: str | Path | None = None) -> Path | None:
+    """返回 PyInstaller 包内 Whisper 目录；不存在则保持联网加载旧行为。"""
+    if bundle_root is None:
+        bundle_root = getattr(sys, "_MEIPASS", None)
+    if not bundle_root:
+        return None
+
+    candidate = Path(bundle_root) / "models" / "whisper"
+    if not candidate.exists():
+        return None
+    missing = [name for name in _BUNDLED_MODEL_FILES if not (candidate / name).is_file()]
+    if missing:
+        raise ModelLoadError(
+            f"bundled Whisper model is incomplete; missing: {', '.join(missing)}"
+        )
+    return candidate
 
 
 class WhisperEngine(ASREngine):
@@ -256,22 +280,27 @@ class WhisperEngine(ASREngine):
                 "faster-whisper 未安装；请运行：pip install faster-whisper"
             ) from exc
 
-        _LOG.info(
-            "loading faster-whisper model=%r device=%s compute_type=%s "
-            "（首次运行会下载模型，约 150MB，请稍候…）",
-            self._model_size, self._device, self._compute_type,
-        )
+        bundled_dir = find_bundled_model_dir()
+        model_ref = str(bundled_dir) if bundled_dir else self._model_size
+        if bundled_dir:
+            _LOG.info("loading bundled faster-whisper model: %s", bundled_dir)
+        else:
+            _LOG.info(
+                "loading faster-whisper model=%r device=%s compute_type=%s "
+                "（首次运行会下载模型，请稍候…）",
+                self._model_size, self._device, self._compute_type,
+            )
         t0 = time.monotonic()
         try:
             self._model = WhisperModel(
-                self._model_size,
+                model_ref,
                 device=self._device,
                 compute_type=self._compute_type,
                 cpu_threads=self._cpu_threads,
             )
         except Exception as exc:
             raise ModelLoadError(
-                f"failed to load faster-whisper model {self._model_size!r}: {exc}"
+                f"failed to load faster-whisper model {model_ref!r}: {exc}"
             ) from exc
 
         elapsed = time.monotonic() - t0
@@ -280,4 +309,3 @@ class WhisperEngine(ASREngine):
     def _ensure_converter_loaded(self) -> None:
         """加载 opencc 繁简转换器（t2s 模式：繁体→简体，字符级映射）。见 asr.asr_engine。"""
         self._converter = load_opencc_converter(self._opencc_enabled)
-

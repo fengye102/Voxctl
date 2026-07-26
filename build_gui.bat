@@ -1,18 +1,31 @@
 @echo off
 rem Build Voxctl GUI-console exe (CLAUDE.md rev 19; onnx rev 21; TTS/keyring rev 34; plugins rev 42)
-rem Output: dist\voxctl\voxctl.exe (onedir, ~271MB)
+rem Output: dist\voxctl\voxctl.exe (onedir, ~271MB default / ~725MB with small offline model)
 rem
 rem  - Default launch opens the PyWebView native GUI console. The --voice
 rem    subprocess role reuses THIS SAME exe (app.py --voice), so it still needs
 rem    the full whisper/audio/TTS stack bundled below.
 rem  - Copy the WHOLE dist\voxctl folder to the target machine.
-rem  - First run downloads the whisper model (~500MB, needs internet).
+rem  - Default: first run downloads Whisper. Offline: set VOXCTL_OFFLINE_MODEL_DIR
+rem    to a resolved CTranslate2 model directory before running this script.
 rem  - Set ANTHROPIC_API_KEY on the target machine (env var), or fill it in the GUI.
 rem  - onedir (NOT onefile): ctranslate2/onnxruntime native DLLs are large;
 rem    onefile would re-extract hundreds of MB to temp on every launch. onedir
 rem    starts instantly.
 cd /d "%~dp0"
 call venv\Scripts\activate
+
+set "VOXCTL_OFFLINE_MODEL_ARGS="
+if defined VOXCTL_OFFLINE_MODEL_DIR (
+    for %%f in (model.bin config.json tokenizer.json vocabulary.txt) do (
+        if not exist "%VOXCTL_OFFLINE_MODEL_DIR%\%%f" (
+            echo [build] offline model missing: %VOXCTL_OFFLINE_MODEL_DIR%\%%f
+            exit /b 1
+        )
+    )
+    set "VOXCTL_OFFLINE_MODEL_ARGS=--add-data "%VOXCTL_OFFLINE_MODEL_DIR%;models\whisper""
+    echo [build] offline Whisper model enabled: %VOXCTL_OFFLINE_MODEL_DIR%
+)
 
 rem Write current git commit hash for frozen version info (core/version.py reads it).
 for /f "delims=" %%h in ('git rev-parse --short HEAD 2^>nul') do echo %%h> core\_build_hash
@@ -74,6 +87,7 @@ pyinstaller --noconfirm --name voxctl ^
     --hidden-import plugins ^
     --hidden-import plugins.base ^
     --hidden-import main ^
+    %VOXCTL_OFFLINE_MODEL_ARGS% ^
     --add-data "%~dp0audio\silero_vad.onnx;." ^
     --add-data "%~dp0core\_build_hash;core" ^
     --add-data "%~dp0webui\static\index.html;webui_static" ^
@@ -99,5 +113,6 @@ copy /y plugins\*.py dist\voxctl\plugins\ >nul
 echo.
 echo [build] done: dist\voxctl\voxctl.exe
 echo [build] copy the WHOLE dist\voxctl folder to the target machine.
-echo [build] first run downloads the whisper model (~500MB, needs internet).
+if defined VOXCTL_OFFLINE_MODEL_DIR echo [build] offline Whisper model bundled; first run needs no model download.
+if not defined VOXCTL_OFFLINE_MODEL_DIR echo [build] first run downloads the whisper model (~500MB, needs internet^).
 echo [build] set ANTHROPIC_API_KEY on the target machine, or fill it in the GUI.

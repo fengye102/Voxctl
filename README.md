@@ -33,8 +33,8 @@
 | [app.py](app.py) | **统一入口**（修订 19）。默认 `python app.py` 起 PyWebView GUI 控制台；`python app.py --voice` 委托 `main.main()` 跑语音。单 exe 靠 `--voice` 参数复用两种角色。含 frozen 下 stdout 重定向（修订 28：语音角色接回 fd1 让崩溃 traceback 落进 voxctl-voice.out 供 GUI 回读，GUI 角色扔 devnull）、chdir 到 exe 目录。 |
 | [main.py](main.py) | **语音主循环入口**。日志配置调 `core/logger.py` 的 `configure_root_logging()`（修订 25：控制台 INFO + 轮转文件 DEBUG，UTF-8，windowed 下跳过控制台 handler）、frozen chdir、`--config` 参数、构造 `MainLoop.from_config_file()` 跑 `asyncio.run`、捕获 Ctrl+C。 |
 | [run.bat](run.bat) | 一键启动语音主程序：设 UTF-8 代码页 → 激活 venv → `python main.py`。日常开发用，用户双击即可。 |
-| [build_voice.bat](build_voice.bat) | 语音主程序 exe 打包脚本（PyInstaller onedir → `dist/voxctl/`，console 模式）。显式 collect ctranslate2/faster_whisper/onnxruntime/opencc/sounddevice/anthropic/openai，exclude torch，`--add-data` 打包 silero_vad.onnx。打包后随包拷 `plugins\*.py` 到 `dist\voxctl\plugins\`，分发版默认启用插件（修订 54）。 |
-| [build_gui.bat](build_gui.bat) | GUI 控制台 exe 打包脚本（onedir `--windowed` 无黑窗）。在 build_voice 基础上加 PyWebView 原生栈（webview/clr_loader/pythonnet/bottle）+ `--hidden-import main`（供 `--voice` 子进程角色）+ 打包 index.html 到 `webui_static`。随包拷 `plugins\*.py`（修订 54）。约 271MB。 |
+| [build_voice.bat](build_voice.bat) | 语音主程序 exe 打包脚本（PyInstaller onedir → `dist/voxctl/`，console 模式）。显式 collect 原生依赖、exclude torch、打包 VAD，并随包拷 `plugins\*.py`。默认约 271MB、首次联网下载 Whisper；修订 60 起可先设置 `VOXCTL_OFFLINE_MODEL_DIR=<CTranslate2 模型目录>`，把模型打到 `_internal/models/whisper`，`small` 离线实测产物约 725MB。 |
+| [build_gui.bat](build_gui.bat) | GUI 控制台 exe 打包脚本（onedir `--windowed` 无黑窗）。在 build_voice 基础上加 PyWebView 原生栈 + `--hidden-import main` + index.html；同样支持 `VOXCTL_OFFLINE_MODEL_DIR` 真离线构建。 |
 | [tests/acceptance/test_gui_smoke.py](tests/acceptance/test_gui_smoke.py) | 源码模式 GUI 窗口**冒烟测试**（修订 19）。开 pywebview 窗口→探测 js_api 桥→检查 11 个方法存在→自动关闭。非交互。 |
 
 ---
