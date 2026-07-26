@@ -253,6 +253,16 @@ select option { background: #fff; color: var(--ink); }
 .btn.stop:disabled:hover { background: transparent; }
 /* 小号按钮（表格行内操作 / 刷新） */
 .btn.sm { height: 36px; padding: 0 16px; font-size: 13px; }
+/* 模型刷新按钮（修订 57） */
+.btn-sm {
+  font-family: var(--body); font-size: 12px; font-weight: 500;
+  background: transparent; color: var(--accent); border: 1px solid var(--accent);
+  border-radius: 8px; height: 30px; padding: 0 10px; cursor: pointer;
+  white-space: nowrap; transition: background .2s;
+}
+.btn-sm:hover { background: rgba(255,111,53,.08); }
+.btn-sm:disabled { opacity: .45; cursor: not-allowed; }
+.btn-sm:disabled:hover { background: transparent; }
 /* 语音控制按钮组：推到右侧 */
 .btn-group { margin-left: auto; display: flex; gap: 10px; }
 .save-row > .form-note { margin-top: 0; }
@@ -569,6 +579,7 @@ td.path { font-family: var(--mono); font-size: 12px; color: var(--ink-dim); word
           <label for="set-model">LLM 模型</label>
           <div class="field">
             <input type="text" id="set-model" list="llm-model-list" placeholder="选择或输入模型标识（中转站别名可自由填）">
+            <button type="button" class="btn-sm" onclick="fetchModels('llm','set-model','llm-model-list','set-baseurl','set-apikey')">刷新模型</button>
             <datalist id="llm-model-list">
               <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
               <option value="claude-sonnet-5">Claude Sonnet 5</option>
@@ -645,6 +656,7 @@ td.path { font-family: var(--mono); font-size: 12px; color: var(--ink-dim); word
           <label for="set-asr-cloud-model">云端模型</label>
           <div class="field">
             <input type="text" id="set-asr-cloud-model" list="asr-model-list" placeholder="如 whisper-1（中转站别名可自由填）">
+            <button type="button" class="btn-sm" onclick="fetchModels('asr','set-asr-cloud-model','asr-model-list','set-asr-baseurl','set-asr-apikey')">刷新模型</button>
             <datalist id="asr-model-list">
               <option value="whisper-1">whisper-1</option>
             </datalist>
@@ -687,6 +699,7 @@ td.path { font-family: var(--mono); font-size: 12px; color: var(--ink-dim); word
           <label for="set-tts-cloud-model">云端模型</label>
           <div class="field">
             <input type="text" id="set-tts-cloud-model" list="tts-model-list" placeholder="如 tts-1（中转站别名可自由填）">
+            <button type="button" class="btn-sm" onclick="fetchModels('tts','set-tts-cloud-model','tts-model-list','set-tts-baseurl','set-tts-apikey')">刷新模型</button>
             <datalist id="tts-model-list">
               <option value="tts-1">tts-1</option>
               <option value="tts-1-hd">tts-1-hd</option>
@@ -1091,6 +1104,30 @@ async function saveHotkey() {
     toast(r.hotkey_restart_required ? '已保存，重启本控制台后热键生效' : '已保存', false, 6000);
     loadSettings();
   } else toast(r.error || '保存失败', true);
+}
+
+/* ── 云端模型列表拉取（修订 57） ── */
+async function fetchModels(section, modelInputId, datalistId, baseUrlId, apiKeyId) {
+  const api = API(); if (!api) return;
+  const btn = event && event.target;
+  const baseUrl = $(baseUrlId) ? $(baseUrlId).value.trim() : '';
+  const apiKey = $(apiKeyId) ? $(apiKeyId).value : '';
+  if (btn) { btn.disabled = true; btn.textContent = '刷新中...'; }
+  try {
+    const r = await api.fetch_models(section, baseUrl, apiKey);
+    if (!r.ok) { toast(r.error || '拉取失败', true); return; }
+    const dl = $(datalistId);
+    if (dl) {
+      dl.innerHTML = '';
+      r.models.forEach(id => {
+        const o = document.createElement('option');
+        o.value = id; o.textContent = id;
+        dl.appendChild(o);
+      });
+    }
+    toast('已拉取 ' + r.models.length + ' 个模型');
+  } catch (e) { toast('拉取模型列表失败', true); }
+  finally { if (btn) { btn.disabled = false; btn.textContent = '刷新模型'; } }
 }
 
 /* ── 语音启停 ── */

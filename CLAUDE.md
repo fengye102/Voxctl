@@ -353,11 +353,11 @@ ui:
 plugins:
   enabled: true                   # 插件机制总开关（修订 42）；false = 不扫描 plugins/，LLM schema 不含插件意图
 
-wake_word:                        # 唤醒词（修订 56）：默认关，开启后每条指令须以唤醒词开头才处理
-  enabled: false                  # false = 纯 VAD 激活（旧行为，默认）；true = 须唤醒词前缀
+wake_word:                        # 唤醒词（修订 56/57）：开启后每条指令须以唤醒词开头才处理
+  enabled: true                   # true = 须唤醒词前缀；false = 纯 VAD 激活
   phrases:                        # 唤醒词短语（归一化后前缀匹配，命中即剥离，剩余部分作指令）
-    - 小助手
-    - 你好小助手
+    - 嘿维鸥
+    - 维鸥
   ack_on_bare: true               # 只说唤醒词无后续指令时，是否轻应一声"在"
 
 dictation:                        # 听写模式（修订 56）：说"进入听写"把后续识别文本直接注入当前光标

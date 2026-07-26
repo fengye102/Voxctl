@@ -528,6 +528,82 @@ class Api:
         # 热键改了需重启 GUI 才重新注册；回传标记让前端提示用户
         return {"ok": True, "hotkey_restart_required": bool(hotkey) or hotkey_enabled is not None}
 
+    # ---- 云端模型列表拉取（修订 57）--------------------------------------
+    def fetch_models(self, section: str = "llm",
+                     base_url: str = "", api_key: str = "") -> dict:
+        """从 base_url/models 拉取可用模型列表（OpenAI 标准端点）。
+
+        section: "llm" / "asr" / "tts"
+        base_url: 前端表单当前值（可能未保存），空串 → 读已存配置
+        api_key: 前端表单当前值，空串 → 从 keyring 读已存 key
+        """
+        import urllib.request
+        import urllib.error
+
+        section = (section or "llm").strip().lower()
+        base_url = (base_url or "").strip()
+        api_key = (api_key or "").strip()
+
+        # 解析 base_url：前端传了用前端的，否则读已存配置
+        if not base_url:
+            if section == "llm":
+                eff = effective_llm_settings(_load_config_llm())
+                base_url = eff.get("base_url", "")
+            else:
+                cfg = _load_config_section(section)
+                sec = effective_section_settings(
+                    cfg, section,
+                    _ASR_OVERRIDE_FIELDS if section == "asr" else _TTS_OVERRIDE_FIELDS,
+                )
+                base_url = sec.get("base_url", "")
+
+        if not base_url:
+            # 无 base_url 时按 provider 给默认端点
+            if section == "llm":
+                prov = effective_llm_settings(_load_config_llm()).get("provider", "")
+                if prov == "openai":
+                    base_url = "https://api.openai.com/v1"
+                else:
+                    return {"ok": False, "error": "官方 Anthropic 无需拉取模型列表；如用中转站请填写 base_url"}
+            else:
+                base_url = "https://api.openai.com/v1"
+
+        # 解析 api_key：前端传了用前端的，否则从 keyring/env 读
+        if not api_key:
+            if section == "llm":
+                env_name = _load_config_llm().get("api_key_env", "ANTHROPIC_API_KEY")
+            else:
+                cfg = _load_config_section(section)
+                env_name = str(cfg.get("api_key_env", "OPENAI_API_KEY"))
+            api_key = load_api_key(env_name) or os.environ.get(env_name, "")
+
+        if not api_key:
+            return {"ok": False, "error": "缺少 API Key，请先填写并保存"}
+
+        url = base_url.rstrip("/") + "/models"
+        req = urllib.request.Request(url, headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        })
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read())
+        except urllib.error.HTTPError as exc:
+            return {"ok": False, "error": f"HTTP {exc.code}：{exc.reason}"}
+        except urllib.error.URLError as exc:
+            return {"ok": False, "error": f"网络错误：{exc.reason}"}
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": f"请求失败：{exc}"}
+
+        raw = data.get("data", [])
+        if not isinstance(raw, list):
+            return {"ok": False, "error": "返回格式不符合 OpenAI /v1/models 规范"}
+
+        models = sorted(
+            [str(m.get("id", "")) for m in raw if isinstance(m, dict) and m.get("id")],
+        )
+        return {"ok": True, "models": models}
+
     # ---- 语音子进程启停（修订 20：加固失败反馈，不再静默崩溃）------------
     def voice_start(self) -> dict:
         with self._voice_lock:
