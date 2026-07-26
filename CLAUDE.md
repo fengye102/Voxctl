@@ -124,20 +124,20 @@ nlu/
 
 **换 provider 前必须验证的事（对应第 8.9 节）**：两个协议都支持 tool use / function calling 是硬性前提（第 5 节意图解析要求 LLM 只输出结构化数据），换任何一个 provider 或中转站之前，先用一次性脚本单独测试目标端点是否真的支持结构化输出，不要等集成进 `intent_parser.py` 才发现不支持。
 
-### 2.2 云端 ASR / TTS provider（OpenAI 兼容，修订 45；本节修订 72 补写）
+### 2.2 云端 ASR / TTS provider（OpenAI 兼容，修订 45；本节修订 72 补写，修订 73 增 chat 格式 ASR）
 
 > **文档修复说明（修订 72）**：本节能力在修订 45 落地（代码、config 注释、测试均引用"§2.2"），但当时 CLAUDE.md 漏写了本节（推测在"修订 45-50 累积"的合并提交中丢失），违反"先改文档再改代码"。本节按现行代码行为补写，无行为变更。
 
 **关键事实**：Anthropic 协议无音频端点（无 ASR、无 TTS），云端音频**只做 OpenAI 格式**——ASR 走 `/v1/audio/transcriptions`、TTS 走 `/v1/audio/speech`，无 anthropic 分支。本地引擎保持默认，云端 opt-in（改 config `provider` 字段才启用），行为可逆。
 
 **架构**（镜像 §2.1 的 nlu/ 多 provider 结构，业务层只依赖抽象接口 + 工厂，不感知本地/云端）：
-- **ASR**：`asr/asr_engine.py` 定义抽象基类 `ASREngine`（transcribe / warmup / close）、`ASRResult`、异常层级（含云端专用 `ASRRemoteError`）、共享 helper（`apply_opencc` 繁→简 / `finalize_result` 置信度过滤）和工厂 `build_asr_engine()`；`asr.provider: local`（默认）= `whisper_engine.WhisperEngine`（faster-whisper），`openai` = `asr/providers/openai_asr.py` 的 `OpenAIASREngine`
+- **ASR**：`asr/asr_engine.py` 定义抽象基类 `ASREngine`（transcribe / warmup / close）、`ASRResult`、异常层级（含云端专用 `ASRRemoteError`）、共享 helper（`apply_opencc` 繁→简 / `finalize_result` 置信度过滤）和工厂 `build_asr_engine()`；`asr.provider: local`（默认）= `whisper_engine.WhisperEngine`（faster-whisper），`openai` = `asr/providers/openai_asr.py` 的 `OpenAIASREngine`（标准 `/v1/audio/transcriptions`），`openai_chat` = `asr/providers/openai_chat_asr.py` 的 `OpenAIChatASREngine`（修订 73：chat/completions `input_audio` 多模态格式，适配只经该格式暴露 ASR 的中转站；**永远无置信度字段**，见 §8.12；`language` 字段该格式不支持传递，忽略）
 - **TTS**：`tts/tts_base.py` 定义抽象基类 `BaseTTSEngine`（speak / speak_result / synthesize_pcm，内置 pyttsx3 SAPI5 后备——两条云路径失败时共用的最后一道降级）和工厂 `build_tts_engine()`；`tts.provider: edge`（默认）= edge-tts，`openai` = `tts/providers/openai_tts.py`；MP3 解码共享逻辑在 `tts/_audio.py`
-- **配置**：云端字段（`model` / `api_key_env` / `base_url` / `timeout`，TTS 另有 `tts_voice`）仅 `provider: openai` 时生效；api_key 经 `api_key_env` 指向的环境变量读取（§6 铁律不变，不进 config 明文）；复用意图解析层已装的 openai SDK，无新依赖
+- **配置**：云端字段（`model` / `api_key_env` / `base_url` / `timeout`，TTS 另有 `tts_voice`）仅云端 provider（ASR：`openai` / `openai_chat`；TTS：`openai`）时生效；api_key 经 `api_key_env` 指向的环境变量读取（§6 铁律不变，不进 config 明文）；复用意图解析层已装的 openai SDK，无新依赖
 
-**已知退化（§8.12）**：中转站的 verbose_json 响应可能缺置信度字段（no_speech_prob / avg_logprob），此时云端 ASR 无法做静音/噪声过滤，静音可能漏过滤——要可靠过滤请用本地 provider。
+**已知退化（§8.12）**：中转站的 verbose_json 响应可能缺置信度字段（no_speech_prob / avg_logprob），此时云端 ASR 无法做静音/噪声过滤，静音可能漏过滤——要可靠过滤请用本地 provider。`openai_chat` 格式**协议本身就没有置信度字段**，该退化恒成立，不是中转站质量问题。
 
-**换端点前先探测（§8.9 同款纪律）**：并非所有中转都实现标准音频端点。实测（2026-07-26，修订 72）：某中转的 ASR/TTS 模型仅经 chat/completions 的 `input_audio` 多模态格式暴露，标准 `/v1/audio/transcriptions` 和 `/v1/audio/speech` 均 404，现有 provider 无法对接（对接需新增 provider 实现，属新能力面须走修订流程）。换云端音频端点前先跑 `tests/tools/probe_cloud_asr.py` 验证。
+**换端点前先探测（§8.9 同款纪律）**：并非所有中转都实现标准音频端点。实测（2026-07-26，修订 72）：某中转的 ASR/TTS 模型仅经 chat/completions 的 `input_audio` 多模态格式暴露，标准 `/v1/audio/transcriptions` 和 `/v1/audio/speech` 均 404。修订 73 为该格式新增 `openai_chat` ASR provider（动机：--live 实测本地 medium 因投机 ASR 双跑抢核，实际 7.9~9.4s/句，云端 chat 格式 4~5.6s/句且 CER≈0%，延迟约省一半）；**TTS 仍无 chat 格式对接**（TTS 经 chat 返回的是音频还是文本因中转而异，未验证，不做）。换云端音频端点前先跑 `tests/tools/probe_cloud_asr.py` 验证。
 
 ### Windows 安装说明
 
@@ -211,7 +211,8 @@ Voxctl/
 │   ├── asr_engine.py          # ASR 抽象层（修订 45）：ASREngine 基类 + ASRResult/异常层级 + build_asr_engine() 工厂，见 §2.2
 │   ├── providers/
 │   │   ├── __init__.py
-│   │   └── openai_asr.py      # 云端 ASR：OpenAI 兼容 /v1/audio/transcriptions（修订 45，§2.2/§8.12）
+│   │   ├── openai_asr.py      # 云端 ASR：OpenAI 兼容 /v1/audio/transcriptions（修订 45，§2.2/§8.12）
+│   │   └── openai_chat_asr.py # 云端 ASR：chat/completions input_audio 多模态格式（修订 73，§2.2/§8.12）
 │   └── whisper_engine.py      # faster-whisper 封装（provider=local 默认）
 │
 ├── nlu/
@@ -321,7 +322,7 @@ Voxctl/
 │   │   ├── test_phrase_match.py    # 唤醒词/听写退出文本匹配纯函数（27 例，修订 56）
 │   │   ├── test_text_input.py      # 听写文本注入 SendInput（11 例，控制字符跳过 + 非 Windows 降级，修订 56）
 │   │   ├── test_rev56_features.py  # 唤醒词/听写/多轮/度量/enter_dictation 接线集成（22 例，修订 56）
-│   │   ├── test_asr_provider.py    # ASR 抽象层 + 云端 provider（修订 45，§2.2/§8.12，网络全 mock）
+│   │   ├── test_asr_provider.py    # ASR 抽象层 + 云端 provider（修订 45/73，§2.2/§8.12，网络全 mock）
 │   │   ├── test_tts_provider.py    # TTS 抽象层 + 云端 provider（修订 45，§2.2，网络全 mock）
 │   │   ├── test_tray.py            # 系统托盘状态单元测试（修订 59，Win32 全 mock）
 │   │   ├── test_security_review.py # 安全边界回归（白名单/路径/插件约束）
@@ -371,7 +372,7 @@ vad:
   interrupt_threshold_speaker: 0.8     # 播报中打断判定阈值（外放模式，更保守）
 
 asr:
-  provider: local                # local = 本地 faster-whisper（默认）/ openai = 云端 OpenAI 兼容，见 §2.2
+  provider: local                # local = 本地 faster-whisper（默认）/ openai = 云端标准音频端点 / openai_chat = 云端 chat 多模态格式（修订 73），见 §2.2
   model_size: medium             # 默认 medium（修订 72：small 实测 CER 14.8%~23% 不达标；medium 达标但 CPU 单句 4~5s，延迟记为已知限制）
   device: cpu                    # cpu / cuda，默认 cpu；GPU 留到性能优化阶段
   language: zh                   # ASR 识别语言（传给 faster-whisper），zh/en/ja 等；只改此项不影响 TTS/LLM 链路
@@ -729,7 +730,8 @@ whitelist:
 
 - **坑**：本地 faster-whisper 每个 segment 都带 `no_speech_prob` / `avg_logprob`，静音/噪声靠这两个字段过滤；云端 `/v1/audio/transcriptions` 请求 `response_format="verbose_json"` 才有同款字段，而**中转站可能只返回纯文本，或 verbose_json 缺置信度字段**——此时无法过滤，静音/噪声片段可能被当成有效指令流进意图解析。
 - **规避**：`OpenAIASREngine` 检测响应里有无置信度字段：有则沿用与本地相同的过滤阈值；无则退化为"只按空文本判 is_empty"并记日志，**不猜测、不伪造置信度**。对静音过滤有硬要求的场景用本地 provider（`asr.provider: local`）。
-- **换端点前先探测**：用 `tests/tools/probe_cloud_asr.py` 验证目标端点是否实现标准 `/v1/audio/transcriptions`、是否返回置信度字段（§2.2 实测记录：有中转仅经 chat/completions `input_audio` 格式暴露 ASR，标准端点 404，现有 provider 接不上）。
+- **`openai_chat` 恒无置信度（修订 73）**：chat/completions `input_audio` 格式协议上就不返回 no_speech_prob / avg_logprob，`OpenAIChatASREngine` 一律按 `has_confidence=False` 走空文本判定，退化恒成立。上游 silero-vad 已做一层人声过滤 + 唤醒词前缀过滤兜底，静音漏过滤的实际风险被这两层压低，但不为零。
+- **换端点前先探测**：用 `tests/tools/probe_cloud_asr.py` 验证目标端点是否实现标准 `/v1/audio/transcriptions`、是否返回置信度字段（§2.2 实测记录：有中转仅经 chat/completions `input_audio` 格式暴露 ASR，标准端点 404——该格式修订 73 起由 `asr.provider: openai_chat` 对接）。
 
 ---
 

@@ -76,7 +76,8 @@ class ASREngine(ABC):
 
     具体实现：
       - asr.whisper_engine.WhisperEngine（本地 faster-whisper，默认）
-      - asr.providers.openai_asr.OpenAIASREngine（云端 OpenAI 兼容）
+      - asr.providers.openai_asr.OpenAIASREngine（云端标准音频端点）
+      - asr.providers.openai_chat_asr.OpenAIChatASREngine（云端 chat 多模态格式，修订 73）
     """
 
     @abstractmethod
@@ -188,7 +189,9 @@ def build_asr_engine(asr_cfg: dict) -> ASREngine:
 
     provider 取值：
       - "local"（默认）：本地 faster-whisper（asr.whisper_engine.WhisperEngine）
-      - "openai"：云端 OpenAI 兼容（asr.providers.openai_asr.OpenAIASREngine）
+      - "openai"：云端标准 /v1/audio/transcriptions（asr.providers.openai_asr.OpenAIASREngine）
+      - "openai_chat"：云端 chat/completions input_audio 多模态格式
+        （asr.providers.openai_chat_asr.OpenAIChatASREngine，修订 73）
     未知 provider 抛 ValueError（暴露配置错误，不静默兜底）。
     """
     provider = str((asr_cfg or {}).get("provider", "local")).strip().lower()
@@ -201,8 +204,13 @@ def build_asr_engine(asr_cfg: dict) -> ASREngine:
         from asr.providers.openai_asr import OpenAIASREngine
         return OpenAIASREngine.from_config(asr_cfg or {})
 
+    if provider == "openai_chat":
+        from asr.providers.openai_chat_asr import OpenAIChatASREngine
+        return OpenAIChatASREngine.from_config(asr_cfg or {})
+
     raise ValueError(
-        f"unsupported ASR provider: {provider!r} (expected 'local' or 'openai')"
+        f"unsupported ASR provider: {provider!r} "
+        "(expected 'local', 'openai' or 'openai_chat')"
     )
 
 

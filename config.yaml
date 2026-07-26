@@ -42,8 +42,12 @@ vad:
   # 调优依据：日志里的 VAD interrupt triggered 行（prob=X, threshold=Y, consecutive=Z）
 
 asr:
-  # ASR provider（CLAUDE.md §2.2）：local = 本地 faster-whisper（默认）/ openai = 云端 OpenAI 兼容
-  # 云端只做 OpenAI 格式（Anthropic 无音频端点），下面 model/api_key_env/base_url/timeout 仅 provider=openai 时生效
+  # ASR provider（CLAUDE.md §2.2）：
+  #   local       = 本地 faster-whisper（默认）
+  #   openai      = 云端标准 /v1/audio/transcriptions
+  #   openai_chat = 云端 chat/completions input_audio 多模态格式（修订 73，适配只经该格式
+  #                 暴露 ASR 的中转站；协议无置信度字段，静音过滤退化恒成立，§8.12）
+  # 云端只做 OpenAI 格式（Anthropic 无音频端点），下面 model/api_key_env/base_url/timeout 仅云端 provider 生效
   provider: local
   # faster-whisper 模型大小：base / small（约 500MB）/ medium（约 1.5GB）/ large
   # 默认 medium（修订 72）：small 实测 CER 14.8%~23% 不达标；medium CER 达标但
@@ -58,11 +62,12 @@ asr:
   # 繁简转换：Whisper 中文模型对大陆普通话有时输出繁体字符，用 opencc t2s 字符级转换
   # true = 启用（推荐）；false = 禁用（仅在排查 opencc 问题时关闭）
   opencc_enabled: true
-  # --- 以下仅 provider=openai 时生效（云端 ASR，CLAUDE.md §2.2 / §8.12）---
+  # --- 以下仅 provider=openai / openai_chat 时生效（云端 ASR，CLAUDE.md §2.2 / §8.12）---
   model: whisper-1              # 云端模型标识（中转站可能是自定义别名）
   api_key_env: OPENAI_API_KEY  # 从环境变量读取 key，不写明文（§6 铁律）
-  base_url: ""                 # 留空 = 官方端点；填中转站 URL 前先验证 /v1/audio/transcriptions（§8.9）
+  base_url: ""                 # 留空 = 官方端点；填中转站 URL 前先跑 tests/tools/probe_cloud_asr.py（§8.9/§2.2）
   timeout: 30                  # 单次请求超时秒数
+  # openai_chat 注意：language 字段该格式不支持传递（忽略）；opencc_enabled 仍生效
 
 llm:
   # provider 决定实例化哪个 LLMClient 实现（CLAUDE.md §2.1）

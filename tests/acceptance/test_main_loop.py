@@ -711,6 +711,11 @@ def main() -> int:
     with open(config_path, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
+    # 与真实运行路径一致（core/factory.create_from_config_file）：套 voxctl.local.yaml
+    # 覆盖 + 从 keyring 注入 api_key 到环境变量（修订 73；无本地文件时 no-op，CI 不受影响）
+    from core.local_settings import apply_local_overrides
+    apply_local_overrides(config)
+
     if args.live:
         return asyncio.run(run_live(config, args.device))
 

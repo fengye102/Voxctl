@@ -1,10 +1,11 @@
-"""云端 ASR provider 单元测试（修订 45）。
+"""云端 ASR provider 单元测试（修订 45 / 73）。
 
 全部 mock，不联网、不需真实设备，进 CI。覆盖：
-  - build_asr_engine 工厂分发（local / openai / 未知）
+  - build_asr_engine 工厂分发（local / openai / openai_chat / 未知）
   - _encode_wav 编码正确性（stdlib wave 回读）
   - _parse_response 解析（verbose_json 带/不带置信度）
   - OpenAIASREngine.transcribe 走 mock client、置信度过滤、opencc、错误归一化
+  - OpenAIChatASREngine（修订 73）：input_audio 请求构造、文本提取、恒无置信度退化
   - finalize_result 的置信度过滤 + 退化行为
 """
 
@@ -325,3 +326,193 @@ def test_openai_asr_degrades_without_confidence(monkeypatch):
     result = engine.transcribe(np.zeros(1600, dtype=np.float32))
     assert not result.is_empty
     assert result.text == "退出程序"
+
+
+# ---------------------------------------------------------------------------
+# OpenAIChatASREngine（修订 73：chat/completions input_audio 格式）
+# ---------------------------------------------------------------------------
+
+from asr.providers.openai_chat_asr import (  # noqa: E402
+    OpenAIChatASREngine,
+    _extract_text,
+)
+
+
+class _FakeChatCompletions:
+    def __init__(self, result=None, exc=None):
+        self._result = result
+        self._exc = exc
+        self.calls = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        if self._exc is not None:
+            raise self._exc
+        return self._result
+
+
+class _FakeChat:
+    def __init__(self, completions):
+        self.completions = completions
+
+
+def _install_fake_openai_chat(monkeypatch, completions):
+    """注入假 openai 模块（chat.completions 形态），返回 (module, client_holder)。"""
+    holder = {}
+
+    fake = types.ModuleType("openai")
+    fake.APITimeoutError = _FakeTimeout
+    fake.AuthenticationError = _FakeAuth
+    fake.PermissionDeniedError = _FakePermission
+    fake.RateLimitError = _FakeRateLimit
+    fake.APIConnectionError = _FakeConnection
+    fake.APIError = _FakeAPIError
+
+    class _Client:
+        def __init__(self, **kwargs):
+            self.chat = _FakeChat(completions)
+            self.init_kwargs = kwargs
+            holder["client"] = self
+
+    fake.OpenAI = _Client
+    monkeypatch.setitem(sys.modules, "openai", fake)
+    return fake, holder
+
+
+def _chat_resp(content):
+    """构造最小 chat.completions 响应 dict。"""
+    return {"choices": [{"message": {"content": content}}]}
+
+
+_CHAT_CFG = {
+    "provider": "openai_chat",
+    "model": "mimo-asr",
+    "api_key_env": "OPENAI_API_KEY",
+    "base_url": "https://relay.example.com/v1",
+    "opencc_enabled": False,
+}
+
+
+def test_build_asr_engine_openai_chat(monkeypatch):
+    _install_fake_openai_chat(monkeypatch, _FakeChatCompletions(result=_chat_resp("x")))
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    engine = build_asr_engine(dict(_CHAT_CFG))
+    assert isinstance(engine, OpenAIChatASREngine)
+
+
+def test_chat_asr_requires_model(monkeypatch):
+    _install_fake_openai_chat(monkeypatch, _FakeChatCompletions())
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    cfg = dict(_CHAT_CFG)
+    cfg["model"] = ""
+    with pytest.raises(ASRRemoteError, match="model"):
+        OpenAIChatASREngine.from_config(cfg)
+
+
+def test_chat_asr_requires_key(monkeypatch):
+    _install_fake_openai_chat(monkeypatch, _FakeChatCompletions())
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    with pytest.raises(ASRRemoteError, match="API key"):
+        OpenAIChatASREngine.from_config(dict(_CHAT_CFG))
+
+
+def test_chat_asr_passes_base_url(monkeypatch):
+    _, holder = _install_fake_openai_chat(
+        monkeypatch, _FakeChatCompletions(result=_chat_resp("x"))
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    OpenAIChatASREngine.from_config(dict(_CHAT_CFG))
+    assert holder["client"].init_kwargs.get("base_url") == "https://relay.example.com/v1"
+
+
+def test_chat_asr_transcribe_builds_input_audio_request(monkeypatch):
+    import base64 as b64
+    cc = _FakeChatCompletions(result=_chat_resp("打开记事本"))
+    _install_fake_openai_chat(monkeypatch, cc)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    engine = OpenAIChatASREngine.from_config(dict(_CHAT_CFG))
+    audio = np.zeros(16000, dtype=np.float32)
+    result = engine.transcribe(audio, sample_rate=16000)
+
+    assert not result.is_empty
+    assert result.text == "打开记事本"
+    call = cc.calls[0]
+    assert call["model"] == "mimo-asr"
+    block = call["messages"][0]["content"][0]
+    assert block["type"] == "input_audio"
+    assert block["input_audio"]["format"] == "wav"
+    # data 是合法 base64 的 WAV（RIFF 头）
+    assert b64.b64decode(block["input_audio"]["data"])[:4] == b"RIFF"
+
+
+def test_chat_asr_no_confidence_never_filters(monkeypatch):
+    # §8.12：chat 格式恒无置信度，有文本就返回，不做 no_speech_prob 过滤
+    cc = _FakeChatCompletions(result=_chat_resp("查询内存"))
+    _install_fake_openai_chat(monkeypatch, cc)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    engine = OpenAIChatASREngine.from_config(dict(_CHAT_CFG))
+    result = engine.transcribe(np.zeros(1600, dtype=np.float32))
+    assert not result.is_empty
+    assert result.no_speech_prob == 0.0
+    assert result.avg_logprob == 0.0
+
+
+def test_chat_asr_empty_content_is_empty(monkeypatch):
+    cc = _FakeChatCompletions(result=_chat_resp(""))
+    _install_fake_openai_chat(monkeypatch, cc)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    engine = OpenAIChatASREngine.from_config(dict(_CHAT_CFG))
+    result = engine.transcribe(np.zeros(1600, dtype=np.float32))
+    assert result.is_empty
+
+
+def test_chat_asr_timeout_maps_remote_error(monkeypatch):
+    cc = _FakeChatCompletions(exc=_FakeTimeout("timed out"))
+    _install_fake_openai_chat(monkeypatch, cc)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    engine = OpenAIChatASREngine.from_config(dict(_CHAT_CFG))
+    with pytest.raises(ASRRemoteError, match="timeout"):
+        engine.transcribe(np.zeros(1600, dtype=np.float32))
+
+
+def test_chat_asr_auth_maps_remote_error(monkeypatch):
+    cc = _FakeChatCompletions(exc=_FakeAuth("bad key"))
+    _install_fake_openai_chat(monkeypatch, cc)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    engine = OpenAIChatASREngine.from_config(dict(_CHAT_CFG))
+    with pytest.raises(ASRRemoteError, match="auth"):
+        engine.transcribe(np.zeros(1600, dtype=np.float32))
+
+
+# ---------------------------------------------------------------------------
+# _extract_text（纯函数）
+# ---------------------------------------------------------------------------
+
+def test_extract_text_str_content():
+    assert _extract_text(_chat_resp("  你好  ")) == "你好"
+
+
+def test_extract_text_list_content():
+    resp = _chat_resp([
+        {"type": "text", "text": "打开"},
+        {"type": "text", "text": "浏览器"},
+    ])
+    assert _extract_text(resp) == "打开浏览器"
+
+
+def test_extract_text_missing_choices():
+    assert _extract_text({}) == ""
+    assert _extract_text({"choices": []}) == ""
+
+
+def test_extract_text_null_content():
+    assert _extract_text(_chat_resp(None)) == ""
+
+
+def test_extract_text_weird_shape_returns_empty():
+    assert _extract_text(object()) == ""

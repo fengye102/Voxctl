@@ -5,8 +5,8 @@
   - TTS：POST /v1/audio/speech（OpenAITTSEngine 的唯一对接方式）
 
 同时探测非标准的 chat/completions `input_audio` 多模态格式——部分中转（实测 2026-07-26）
-只经该格式暴露 ASR 模型，标准端点 404；这种端点现有 provider **接不上**，对接需新增
-provider 实现（新能力面，须走修订流程），本探针只负责把事实探清楚。
+只经该格式暴露 ASR 模型，标准端点 404；修订 73 起该格式由 `asr.provider: openai_chat`
+（OpenAIChatASREngine）对接，TTS 仍无 chat 格式对接。
 
 用法（key 走环境变量，不进命令行历史）：
   $env:VOXCTL_PROBE_KEY = 'sk-...'
@@ -88,7 +88,7 @@ def probe_chat_audio(base_url: str, key: str, model: str, wav: Path) -> None:
         _, body, dt = _post_json(base_url, "/chat/completions", key, payload)
         text = json.loads(body.decode())["choices"][0]["message"]["content"]
         print(f"  响应 200  {dt:.2f}s  文本：{text}")
-        print("  （注意：此格式现有 OpenAIASREngine 接不上，仅说明模型走多模态暴露）")
+        print("  （此格式由 asr.provider: openai_chat 对接，修订 73；无置信度字段，§8.12）")
     except urllib.error.HTTPError as e:
         print(f"  HTTP {e.code}：{e.read().decode()[:200]}")
     except Exception as e:
