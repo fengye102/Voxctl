@@ -221,6 +221,39 @@ class TestApplyLocalOverrides:
         assert config["tts"]["voice"] == "zh-CN-YunxiNeural"
         assert config["tts"]["tts_voice"] == "alloy"
 
+    def test_api_key_env_overridden(self, tmp_path: Path) -> None:
+        """api_key_env 可覆盖（修订 75）：本地切 provider 时同步切 key 变量名。"""
+        p = tmp_path / "local.yaml"
+        _write_yaml(p, {
+            "llm": {"provider": "openai", "api_key_env": "OPENAI_API_KEY"},
+            "asr": {"api_key_env": "MY_ASR_KEY"},
+            "tts": {"api_key_env": "MY_TTS_KEY"},
+        })
+        config = _make_config()
+        ls.apply_local_overrides(config, p)
+        assert config["llm"]["api_key_env"] == "OPENAI_API_KEY"
+        assert config["asr"]["api_key_env"] == "MY_ASR_KEY"
+        assert config["tts"]["api_key_env"] == "MY_TTS_KEY"
+
+    def test_api_key_injected_into_overridden_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """key 注入用覆盖后的 api_key_env（修订 75：注入循环在字段覆盖之后跑）。"""
+        p = tmp_path / "local.yaml"
+        _write_yaml(p, {"llm": {"provider": "openai", "api_key_env": "REV75_TEST_KEY"}})
+        config = _make_config()
+        monkeypatch.delenv("REV75_TEST_KEY", raising=False)
+
+        mock_kr = MagicMock()
+        mock_kr.get_password.side_effect = (
+            lambda service, name: "relay-key" if name == "REV75_TEST_KEY" else None
+        )
+        with patch.object(ls, "_keyring", mock_kr):
+            ls.apply_local_overrides(config, p)
+
+        assert os.environ.get("REV75_TEST_KEY") == "relay-key"
+        monkeypatch.delenv("REV75_TEST_KEY", raising=False)
+
     def test_api_key_from_keyring_injected(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

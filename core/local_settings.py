@@ -45,11 +45,15 @@ LOCAL_SETTINGS_FILE = "voxctl.local.yaml"
 KEYRING_SERVICE = "voxctl"
 
 # 各块可直接覆盖进 config 的非敏感字段；api_key 走 keyring，不入 config / 不入 yaml
-_LLM_OVERRIDE_FIELDS = ("provider", "model", "base_url")
+# api_key_env（修订 75）：变量名不是密钥本身，可覆盖——本地切 provider 时必须能同步
+# 切 key 的环境变量名（如 anthropic 用 ANTHROPIC_API_KEY、openai 中转用 OPENAI_API_KEY），
+# 否则覆盖后的 provider 读到另一家的 key。注入循环在 _apply_section 之后跑，
+# 用的是覆盖后的 api_key_env，顺序天然正确。
+_LLM_OVERRIDE_FIELDS = ("provider", "model", "base_url", "api_key_env")
 # asr 本地字段 model_size + 云端字段 provider/model/base_url（修订 46）；两组互不干扰，各服务一种 provider
-_ASR_OVERRIDE_FIELDS = ("model_size", "provider", "model", "base_url")
+_ASR_OVERRIDE_FIELDS = ("model_size", "provider", "model", "base_url", "api_key_env")
 # tts 本地字段 voice + 云端字段 provider/tts_voice/model/base_url（修订 46）；云端音色用 tts_voice 与本地 voice 分开
-_TTS_OVERRIDE_FIELDS = ("voice", "provider", "tts_voice", "model", "base_url")
+_TTS_OVERRIDE_FIELDS = ("voice", "provider", "tts_voice", "model", "base_url", "api_key_env")
 
 
 def _resolve(path: Union[str, Path, None]) -> Path:
