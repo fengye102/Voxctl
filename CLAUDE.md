@@ -227,7 +227,8 @@ Voxctl/
 │   ├── power_status.py         # 电池状态插件（修订 55）：psutil.sensors_battery 查电量/充电，无电池台式机友好降级
 │   ├── reminder.py             # 本地一次性提醒插件（修订 58）：参数校验，定时与播报由主循环负责
 │   ├── weather_query.py        # 天气查询插件（修订 61）：Open-Meteo 固定 HTTPS GET，城市必填
-│   └── known_folder.py         # 固定文件夹插件（修订 62）：只打开桌面/文档/下载 Known Folder
+│   ├── known_folder.py         # 固定文件夹插件（修订 62）：只打开桌面/文档/下载 Known Folder
+│   └── brightness_control.py   # 屏幕亮度插件（修订 63）：WMI 查询/设置/增减内置屏亮度
 │
 ├── tts/
 │   ├── __init__.py
@@ -292,6 +293,7 @@ Voxctl/
 │   │   ├── test_reminder_plugin.py # 本地提醒插件单元测试（修订 58）
 │   │   ├── test_weather_plugin.py  # 天气插件单元测试（修订 61，网络全 mock）
 │   │   ├── test_known_folder_plugin.py # 固定文件夹插件单元测试（修订 62）
+│   │   ├── test_brightness_plugin.py # 屏幕亮度插件单元测试（修订 63，WMI 全 mock）
 │   │   ├── test_phrase_match.py    # 唤醒词/听写退出文本匹配纯函数（27 例，修订 56）
 │   │   ├── test_text_input.py      # 听写文本注入 SendInput（11 例，控制字符跳过 + 非 Windows 降级，修订 56）
 │   │   ├── test_rev56_features.py  # 唤醒词/听写/多轮/度量/enter_dictation 接线集成（22 例，修订 56）
@@ -447,6 +449,8 @@ whitelist:
 
 9. **打开固定文件夹（`plugins/known_folder.py`，修订 62）**：意图 `open_known_folder` 只接受 `desktop/documents/downloads` 三个枚举值，用 Windows `SHGetKnownFolderPath` 动态解析真实路径后通过 `os.startfile` 打开，兼容 OneDrive/系统重定向和非英文用户名；不接受任意路径、不搜索目录、不复用 `open_file` 绕过其“只打开非可执行文件”边界。非 Windows、Known Folder 解析失败、目录不存在或打开失败时明确播报错误；不加 WMI/pywin32 等依赖。
 
+10. **屏幕亮度（`plugins/brightness_control.py`，修订 63）**：意图 `brightness_control` 支持 `query/set/up/down`；`set` 的 `value` 限 0～100，`up/down` 的 `step` 限 1～100且默认 10，结果夹紧到 0～100。Windows 下复用 pyttsx3 已安装的 pywin32，通过 `root\\WMI` 的 `WmiMonitorBrightness` / `WmiMonitorBrightnessMethods.WmiSetBrightness` 控制系统实际暴露的内置显示器，并在线程内显式初始化/释放 COM。只控制 WMI 可见屏幕；不增加 DDC/CI 外接显示器兼容层，不做自动亮度、预设、定时调光或 GUI 控件。非 Windows、无 WMI 实例、缺少匹配写接口或调用失败时明确播报错误。
+
 ---
 
 ## 5. 分步开发计划
@@ -531,6 +535,7 @@ whitelist:
   - **提醒插件不直接调用 TTS 或启动后台线程**：handler 只返回 `payload.reminder` 结构；主循环负责定时和播报。到期时若正在执行/播报，提醒进入队列，回到监听态后再播；程序退出时取消所有未到期提醒，避免后台任务越过进程生命周期。
   - **天气插件只允许固定只读网络访问**：只向 `geocoding-api.open-meteo.com` 和 `api.open-meteo.com` 发 HTTPS GET，URL 由代码固定并用结构化参数编码；响应仅解析为天气数据和 TTS 文本，绝不打开响应中的链接、执行响应内容或发 POST/DELETE。城市必须由用户明确提供，不读取定位、不保存默认城市。
   - **固定文件夹插件不接受路径输入**：`open_known_folder` 只允许桌面/文档/下载三个枚举目标，路径必须由 Windows Known Folder API 返回；不得把 LLM 文本拼成路径，也不得开放任意目录浏览。打开目录是非破坏性操作，无需二次确认。
+  - **亮度插件只写 0～100 的受控数值**：不得把 LLM 文本拼进 WMI 查询或方法名，只调用固定类和固定 `WmiSetBrightness`；查询/设置/增减均非破坏性且可立即恢复，无需二次确认。插件只操作 WMI 返回的显示器实例，不枚举或调用其它 WMI 命名空间能力。
 
 ### 二次确认机制（强制）
 
@@ -598,6 +603,7 @@ whitelist:
 | 真离线 Whisper | 设置有效 `VOXCTL_OFFLINE_MODEL_DIR` 后构建产物含 `models/whisper` 且断网可加载；目录缺关键文件时构建立即失败；未设置时保持轻量联网首次下载行为 |
 | 天气查询 | 明确城市下 `current/today/tomorrow` 均能生成含城市、天气和温度的中文播报；空城市/非法时段/城市无结果/超时/坏响应均明确失败；单元测试不访问真实网络 |
 | 打开固定文件夹 | Windows 下桌面/文档/下载均解析系统真实路径并打开；任意其它名称 100% 拒绝且不调用系统 API；非 Windows 和系统调用失败明确降级 |
+| 屏幕亮度 | 支持查询、设置 0～100、按默认/指定步长增减并夹紧；非法参数 100% 拒绝且不调用 WMI；无兼容屏幕/写接口和 COM 失败明确降级；单元测试不改变真实亮度 |
 
 每个 Step 完成后跑对应测试，不要等到 Step 6 才一起测。
 
