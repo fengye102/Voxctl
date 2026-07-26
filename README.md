@@ -20,11 +20,13 @@
 |---|---|
 | [CLAUDE.md](CLAUDE.md) | **项目唯一事实来源**。架构图、技术栈、MVP 范围、分步开发计划、安全规则、Windows 踩坑；全部变更记录已拆到 [CHANGELOG.md](CHANGELOG.md)（修订 40）。改架构先改这里再改代码。 |
 | [README.md](README.md) | 本文件。全项目文件地图。 |
-| [config.yaml](config.yaml) | **主配置**（用户可改，含手写注释）。audio / vad / asr / llm / tts / ui / whitelist 全部字段。白名单三类（apps 别名、commands 命令、paths 路径）+ 打断阈值调优指南都在这里。`ui` 块控制全局热键（`hotkey` / `hotkey_enabled`）。`wake_word` / `dictation` / `context` / `metrics` 四块是修订 56 新增（唤醒词开关+短语 / 听写退出短语 / 多轮上下文开关 / 度量埋点开关）。禁止在代码里硬编码这些值。 |
-| [voxctl.local.yaml](voxctl.local.yaml) | GUI 控制台维护的**本地覆盖**（机器写入，gitignore）。覆盖 config 的 llm/asr/tts 三块，**含 api_key 明文**。⚠ 随 exe 文件夹走，**勿分享 / 勿传 git**。 |
+| [config.yaml](config.yaml) | **主配置**（用户可改，含手写注释）。audio / vad / asr / llm / tts / ui / whitelist 全部字段。白名单三类（apps 别名、commands 命令、paths 路径）+ 打断阈值调优指南都在这里。`ui` 块控制全局热键和托盘（`hotkey` / `hotkey_enabled` / `tray_enabled`）。`wake_word` / `dictation` / `context` / `metrics` 四块是修订 56 新增（唤醒词开关+短语 / 听写退出短语 / 多轮上下文开关 / 度量埋点开关）。禁止在代码里硬编码这些值。 |
+| [voxctl.local.yaml](voxctl.local.yaml) | GUI 控制台维护的**本地覆盖**（机器写入，gitignore），覆盖 config 的 llm/asr/tts 三块。新写入的 API key 存 OS keyring，不进 yaml；旧版 yaml 明文 key 仅保留迁移读取兼容。 |
 | [user_apps.yaml](user_apps.yaml) | GUI 维护的**用户别名表**（应用名→exe/.lnk 路径，机器写入，gitignore）。启动时合并进 `whitelist.apps`，config.yaml 同名优先。独立成文件是为了不破坏 config.yaml 的注释。（当前工作区可能尚未生成。） |
-| [requirements.txt](requirements.txt) | 依赖清单（宽松基线版本）。pydantic/anthropic/openai/numpy/sounddevice/onnxruntime/faster-whisper/opencc/psutil/edge-tts/av(PyAV)/PyYAML/pywebview。注明修订 21 起用 onnxruntime 跑 VAD、去掉 torch。 |
-| [.gitignore](.gitignore) | 忽略规则。venv、logs、test_audio、打包产物、`voxctl.local.yaml` / `user_apps.yaml`（含密钥/机器写入）。 |
+| [requirements.txt](requirements.txt) | 依赖清单（宽松基线版本）。pydantic/anthropic/openai/numpy/sounddevice/onnxruntime/faster-whisper/opencc/psutil/edge-tts/pyttsx3/av(PyAV)/PyYAML/pywebview/keyring。注明修订 21 起用 onnxruntime 跑 VAD、去掉 torch。 |
+| [pyproject.toml](pyproject.toml) | pytest 与 Ruff 项目配置：测试收集范围、Python 路径和静态检查规则。 |
+| [.github/workflows/ci.yml](.github/workflows/ci.yml) | GitHub Actions CI：安装依赖并执行自动化检查。 |
+| [.gitignore](.gitignore) | 忽略规则。venv、logs、test_audio、打包产物、`voxctl.local.yaml` / `user_apps.yaml`（机器写入的本地状态）。 |
 
 ### 入口 / 启动脚本
 
@@ -56,8 +58,11 @@
 
 | 文件 | 作用 |
 |---|---|
-| [asr/__init__.py](asr/__init__.py) | 导出 WhisperEngine / ASRResult / ASRError。 |
-| [asr/whisper_engine.py](asr/whisper_engine.py) | **faster-whisper 封装**。惰性加载模型，`transcribe()` 返回 `ASRResult`（text、is_empty、no_speech_prob、avg_logprob 等），按置信度过滤空/噪声结果，opencc t2s 繁→简转换，`warmup()`。异常 ASRError/ModelLoadError/TranscribeError。 |
+| [asr/__init__.py](asr/__init__.py) | 导出 ASR 抽象层、工厂、本地 Whisper 实现和异常。 |
+| [asr/asr_engine.py](asr/asr_engine.py) | **ASR 抽象层**。`ASREngine`、`ASRResult`、异常层级、置信度过滤与 OpenCC 共享 helper，以及按 `provider` 构造实现的工厂。 |
+| [asr/providers/__init__.py](asr/providers/__init__.py) | 云端 ASR provider 包标记。 |
+| [asr/providers/openai_asr.py](asr/providers/openai_asr.py) | **OpenAI 兼容云端 ASR**。内存 WAV 上传 `/audio/transcriptions`，统一结果过滤、繁简转换和远端错误归一化。 |
+| [asr/whisper_engine.py](asr/whisper_engine.py) | **faster-whisper 本地实现**。惰性加载模型，`transcribe()` 返回统一 `ASRResult`，按置信度过滤空/噪声结果并做 opencc t2s 转换；冻结产物优先发现 `models/whisper` 随包模型，实现真离线加载。 |
 
 ---
 
@@ -103,6 +108,10 @@
 | [plugins/system_shortcuts.py](plugins/system_shortcuts.py) | **系统快捷插件**（修订 55）。intent `system_shortcuts`，锁屏走 `user32.LockWorkStation()`、截图走 Win+Shift+S，均非破坏性（`dangerous=False`）。 |
 | [plugins/datetime_query.py](plugins/datetime_query.py) | **时间日期查询插件**（修订 55）。intent `datetime_query`，`datetime` 纯只读，12 小时制报时 + 中文星期报日期，TTS 模板，跨平台无按键。 |
 | [plugins/power_status.py](plugins/power_status.py) | **电池状态插件**（修订 55）。intent `power_status`，`psutil.sensors_battery()` 查电量/充电状态，无电池台式机友好降级。 |
+| [plugins/reminder.py](plugins/reminder.py) | **一次性提醒插件**（修订 58）。intent `set_reminder`，校验 1～86400 秒延迟和最多 200 字提醒文本；定时与播报由主循环统一管理，进程退出即取消。 |
+| [plugins/weather_query.py](plugins/weather_query.py) | **天气查询插件**（修订 61）。intent `weather_query`，要求明确城市，固定 HTTPS GET Open-Meteo，支持当前/今天/明天；不定位、不猜城市、无 API key。 |
+| [plugins/known_folder.py](plugins/known_folder.py) | **固定文件夹插件**（修订 62）。intent `open_known_folder`，仅允许桌面/文档/下载，使用 Windows Known Folder API 解析真实路径。 |
+| [plugins/brightness_control.py](plugins/brightness_control.py) | **屏幕亮度插件**（修订 63～65）。intent `brightness_control`，支持查询/设置/增减内置屏亮度，通过显式 WMI `ExecMethod_` 参数对象写入。 |
 
 ---
 
@@ -110,7 +119,11 @@
 
 | 文件 | 作用 |
 |---|---|
-| [tts/__init__.py](tts/__init__.py) | 导出 TTS 相关符号。 |
+| [tts/__init__.py](tts/__init__.py) | 导出 TTS 抽象层、工厂、本地 Edge 实现和异常。 |
+| [tts/tts_base.py](tts/tts_base.py) | **TTS 抽象层**。`BaseTTSEngine`、异常层级、按 `provider` 构造实现的工厂，以及 edge/OpenAI 共用的 pyttsx3 本地后备。 |
+| [tts/_audio.py](tts/_audio.py) | Edge 与 OpenAI TTS 共用的 PyAV MP3→float32 mono PCM 解码工具。 |
+| [tts/providers/__init__.py](tts/providers/__init__.py) | 云端 TTS provider 包标记。 |
+| [tts/providers/openai_tts.py](tts/providers/openai_tts.py) | **OpenAI 兼容云端 TTS**。调用 `/audio/speech` 生成 MP3，经共享解码器播放，远端失败走本地后备。 |
 | [tts/edge_tts_engine.py](tts/edge_tts_engine.py) | **Edge TTS 封装**。`synthesize_pcm()`（edge-tts 出 MP3 → PyAV 解码为 PCM float32）、`speak()`、`speak_result()`。`format_result(ExecutionResult)` 是**纯函数模板拼接**（按 action_type 套模板，退出→"再见"），**不让 LLM 生成播报文本**，保证可控可测。异常 TTSError/Synthesize/Decode。 |
 
 ---
@@ -120,25 +133,27 @@
 | 文件 | 作用 |
 |---|---|
 | [core/__init__.py](core/__init__.py) | 导出 MainLoop / MainLoopError / InterruptCoordinator / LoopState / PendingConfirmation / State。 |
+| [core/version.py](core/version.py) | 版本号与构建信息。源码模式读取 git 短 hash，冻结产物可读取静态 `_build_hash`，不可用时返回 `unknown`。 |
 | [core/state.py](core/state.py) | **状态机定义**。`State` 枚举（IDLE/LISTEN/ASR/EXECUTE/TTS/AWAIT_CONFIRM）、`LoopState` 容器（当前状态、pending、rounds、exit_requested）、`PendingConfirmation`（二次确认上下文）。 |
-| [core/event_loop.py](core/event_loop.py) | **主循环核心**。`MainLoop` 把五个阶段串成状态机：`_phase_listen`/`_phase_asr`/`_phase_execute`/`_phase_tts`/`_phase_await_confirm`。同步调用用 `to_thread` 包装。TTS 阶段并发跑打断监听。二次确认、退出时序（修订 14：exit_requested 延迟到"再见"播完才置位）、打断取消退出（修订 13）、打断事件审计日志。`from_config_file()` 叠加本地覆盖。修订 56 接线：唤醒词前缀过滤 + 听写模式（`_handle_dictation` 注入 + 隐私脱敏审计）+ 多轮上下文（`_last_context` / `_build_context_summary`）+ 各阶段延迟度量埋点。 |
+| [core/event_loop.py](core/event_loop.py) | **主循环核心**。`MainLoop` 把五个阶段串成状态机：`_phase_listen`/`_phase_asr`/`_phase_execute`/`_phase_tts`/`_phase_await_confirm`。同步调用用 `to_thread` 包装，TTS 阶段并发跑打断监听。负责二次确认、退出时序、唤醒词、听写、多轮上下文、度量埋点；修订 58 增加进程内提醒任务与到期播报队列，修订 59 同步托盘阶段状态并管理其生命周期。 |
 | [core/interrupt_coordinator.py](core/interrupt_coordinator.py) | **打断协调器**（Step 7）。TTS 期间 `monitor()` 并发监听音频队列，`process_chunk_interrupt` 判定打断→立即 `player.stop()`。`drain_queue()` 清空带 TTS 泄漏的残留音频块，避免回 LISTEN 后误触发。 |
-| [core/local_settings.py](core/local_settings.py) | **本地覆盖读写**（修订 19/23）。读写 voxctl.local.yaml，`apply_local_overrides()` 把 llm/asr/tts 叠进 config、把 api_key 注入环境变量（intent_parser 读取路径不变）。`effective_*_settings()` 给 GUI 展示生效值。 |
+| [core/local_settings.py](core/local_settings.py) | **本地覆盖读写**（修订 19/23/46）。读写 voxctl.local.yaml 并把 llm/asr/tts 叠进 config；API key 新写入走 OS keyring，启动时注入对应环境变量，旧 yaml key 仅作迁移 fallback。`effective_*_settings()` 给 GUI 展示生效值但不回传明文 key。 |
 | [core/logger.py](core/logger.py) | **共用日志配置**（修订 25 真正实现）。`configure_root_logging(log_path, file_level, console_level, max_bytes, backup_count)`：建 logs 目录 + RotatingFileHandler(UTF-8) + windowless-safe StreamHandler（`sys.stdout` 为 None 时跳过，修订 19）。main.py（voxctl.log/DEBUG）与 webui/gui.py（voxctl-gui.log/INFO）各传参调用，消除此前两处重复逻辑。审计日志 actions.log 是另一条独立路径，不走这里。 |
-| [core/factory.py](core/factory.py) | **MainLoop 构造工厂**（修订 35 从 event_loop 拆出）。`create_from_config_file()` / `create_from_config()` 从 config 实例化所有子模块（recorder/vad/asr/parser/executor/tts/player + 插件注册器 + 修订 56 的唤醒词/听写/多轮/度量配置）并注入 MainLoop。 |
+| [core/factory.py](core/factory.py) | **MainLoop 构造工厂**（修订 35 从 event_loop 拆出）。`create_from_config_file()` / `create_from_config()` 从 config 实例化 recorder/vad/asr/parser/executor/tts/player、插件注册器及唤醒词/听写/多轮/度量配置；按 `ui.tray_enabled` 创建托盘并注入 MainLoop。 |
 | [core/phrase_match.py](core/phrase_match.py) | **文本匹配纯函数**（修订 56）。`normalize()`（NFKC + 去标点空白 + 小写）、`match_wake_prefix(text, phrases)`（唤醒词前缀匹配，把归一化切点映射回原文剥离）、`match_exit_phrase(text, phrases)`（听写退出短语等值或包含匹配）。纯函数无副作用，供 event_loop 唤醒/听写过滤调用。 |
 | [core/audit.py](core/audit.py) | **审计日志写入器**（§6 强制，executor 与 event_loop 共用）。`log_action()` / `log_interrupt_event()`（修订 56 加 `interrupt_latency_ms`）/ `log_metrics()`（修订 56：每轮各阶段延迟写 `event="metrics"` 行）。UTF-8 JSON lines 追加写 logs/actions.log。 |
 
 ---
 
-## ui/ — 全局热键
+## ui/ — 全局热键与系统托盘
 
-全局键盘热键 toggle 语音子进程启停（非破坏性生命周期操作，免二次确认）。修订 50 起浮窗已删，本目录只剩热键监听。
+全局键盘热键 toggle 语音子进程启停（非破坏性生命周期操作，免二次确认）；系统托盘只读展示语音主循环状态。修订 50 起浮窗已删。
 
 | 文件 | 作用 |
 |---|---|
 | [ui/__init__.py](ui/__init__.py) | 包标记。 |
 | [ui/hotkey.py](ui/hotkey.py) | **全局键盘热键**（修订 33）。Win32 `RegisterHotKey` + daemon 消息循环线程，toggle 语音启停。纯 ctypes，不引新依赖。热键被占用回报错误不静默。非 Windows no-op。 |
+| [ui/tray.py](ui/tray.py) | **只读状态托盘**（修订 59）。纯 ctypes 调 `Shell_NotifyIconW`，独立消息线程显示监听/识别/执行/播报/确认状态；无菜单和点击操作，非 Windows 安全降级。 |
 
 ---
 
@@ -156,15 +171,26 @@
 
 分三层组织。默认 `pytest` 只收集 `tests/unit/`（`pyproject.toml` 配置），验收脚本和诊断工具需手动运行。详见 [tests/README.md](tests/README.md)。
 
+[tests/__init__.py](tests/__init__.py) 是测试包标记。
+
 ### unit/ — 单元测试（可进 CI，无需设备/网络）
 
 | 文件 | 作用 |
 |---|---|
+| [tests/unit/__init__.py](tests/unit/__init__.py) | unit 测试包标记。 |
 | [test_app_index.py](tests/unit/test_app_index.py) | AppIndex 匹配规则（临时目录伪造开始菜单，覆盖精确/子串/歧义/零命中/卸载排除）。 |
+| [test_asr_provider.py](tests/unit/test_asr_provider.py) | ASR 抽象工厂、云端 OpenAI provider、WAV 编码、结果过滤与远端错误映射。 |
+| [test_event_loop.py](tests/unit/test_event_loop.py) | 主循环各阶段、确认/退出/打断、提醒、托盘、推测 ASR、审计与运行循环。 |
 | [test_interrupt.py](tests/unit/test_interrupt.py) | 打断功能（mock VAD/Player，12 用例含 monitor 检测/打断取消 pending/exit 时序）。 |
 | [test_stability.py](tests/unit/test_stability.py) | 稳定性（复用 PureStateMachineLoop，30 轮 0 崩溃 + RSS 增长检查 + 状态收敛）。 |
 | [test_webui.py](tests/unit/test_webui.py) | webui 纯函数（validate_alias / user_apps 合并优先级，修订 24 import 改自 webui.gui）。 |
 | [test_hotkey.py](tests/unit/test_hotkey.py) | 热键字符串解析纯函数（修订 33）。 |
+| [test_local_settings.py](tests/unit/test_local_settings.py) | 本地覆盖读写、配置合并、keyring 存取与旧 yaml key 迁移兼容。 |
+| [test_mainloop_integration.py](tests/unit/test_mainloop_integration.py) | mock 组件下的正常流程、退出时序、打断取消退出、确认与多轮稳定性。 |
+| [test_plugins.py](tests/unit/test_plugins.py) | 插件规格、注册/调度、schema 合并、目录加载与 AST 安全扫描。 |
+| [test_security_review.py](tests/unit/test_security_review.py) | 白名单、命令参数、文件扩展名与关闭应用路径匹配的安全回归。 |
+| [test_tts_provider.py](tests/unit/test_tts_provider.py) | TTS 抽象工厂、OpenAI provider、响应取字节、播放和 pyttsx3 降级。 |
+| [test_vad_adaptive.py](tests/unit/test_vad_adaptive.py) | VAD 自适应阈值的噪声基线、夹紧与状态更新规则。 |
 | [test_volume_plugin.py](tests/unit/test_volume_plugin.py) | 音量插件（修订 51）：steps 夹紧、mute/up/down、非 Windows 降级、经真实 PluginRegistry 加载。 |
 | [test_clipboard_plugin.py](tests/unit/test_clipboard_plugin.py) | 剪贴板插件（16 例，修订 53）：读取/空/超长截断/忽略参数/非 Windows 降级/异常兜底 + 真实加载与调度。 |
 | [test_media_control.py](tests/unit/test_media_control.py) | 媒体控制插件（10 例，修订 55）：每个动作按键序列、非法/缺失 action、非 Windows 降级、异常兜底 + 真实加载。 |
@@ -175,11 +201,18 @@
 | [test_phrase_match.py](tests/unit/test_phrase_match.py) | 唤醒词/听写退出文本匹配纯函数（27 例，修订 56）：normalize、唤醒前缀命中/剥离/未命中、退出短语等值与包含匹配、切点映射回原文。 |
 | [test_text_input.py](tests/unit/test_text_input.py) | 听写文本注入 SendInput（11 例，修订 56）：逐字符注入计数、控制字符/BMP 外跳过、非 Windows 降级抛 TextInputError。 |
 | [test_rev56_features.py](tests/unit/test_rev56_features.py) | 修订 56 接线集成（22 例）：enter_dictation 意图/schema/executor/TTS 模板、唤醒词过滤、听写注入与隐私脱敏、多轮上下文透传/摘要更新、度量埋点写审计行。 |
+| [test_reminder_plugin.py](tests/unit/test_reminder_plugin.py) | 一次性提醒插件参数边界、返回契约与注册器加载。 |
+| [test_tray.py](tests/unit/test_tray.py) | 托盘非 Windows 降级与未知状态归一化。 |
+| [test_whisper_offline.py](tests/unit/test_whisper_offline.py) | 随包 Whisper 模型发现、残缺模型拒绝、本地路径传递与两个构建脚本接线。 |
+| [test_weather_plugin.py](tests/unit/test_weather_plugin.py) | 天气三个时段、固定端点、WMO 映射、网络/数据失败与注册器加载。 |
+| [test_known_folder_plugin.py](tests/unit/test_known_folder_plugin.py) | 固定文件夹白名单、Known Folder 解析/打开失败、平台降级与注册器加载。 |
+| [test_brightness_plugin.py](tests/unit/test_brightness_plugin.py) | 亮度查询/设置/增减、参数边界、WMI 原生调用链、平台/硬件降级与注册器加载。 |
 
 ### acceptance/ — 验收脚本（需真实设备/网络，手动运行）
 
 | 文件 | 作用 |
 |---|---|
+| [tests/acceptance/__init__.py](tests/acceptance/__init__.py) | acceptance 测试包标记。 |
 | [test_recorder_vad.py](tests/acceptance/test_recorder_vad.py) | Step 1：录音闭环 + VAD 人声检测（交互式，需真实麦克风，可存 wav）。 |
 | [test_asr.py](tests/acceptance/test_asr.py) | Step 2：ASR 准确率。`--live` 实时录音转写，或 `--wav-dir` 离线核对。 |
 | [test_intent_parser.py](tests/acceptance/test_intent_parser.py) | Step 3：意图解析准确率（打真实 LLM，两个 provider 各跑一遍，无 mock）。 |
@@ -239,6 +272,6 @@ run.bat            # 等价于 python main.py
 
 - **关闭应用 / 命令 / 文件路径 100% 白名单强制**，无绕过；打开应用放开为全机已安装应用（非破坏性）。
 - 危险操作（关应用、删文件、dangerous 命令、关机）需**语音二次确认**。
-- **API Key 绝不进 config.yaml 明文**——只从环境变量读，或存 gitignore 的 voxctl.local.yaml（含明文 key，勿分享/传 git）。
+- **API Key 绝不进 config.yaml / 新写入的 voxctl.local.yaml 明文**——GUI 保存到 OS keyring，启动时注入环境变量；旧 yaml 明文只作迁移读取兼容。
 - 打断只能取消"播报"和"等待确认"，**不能撤回已发出的系统调用**。
 - GUI 只暴露非破坏性操作；控制电脑仍只走语音 + 二次确认。
