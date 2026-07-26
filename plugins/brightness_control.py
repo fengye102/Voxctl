@@ -48,7 +48,7 @@ def _apply_brightness(reading_objects, setter_objects, action, value, step) -> l
             target = min(100, current + step)
         else:
             target = max(0, current - step)
-        setter.WmiSetBrightness(1, target)
+        setter.WmiSetBrightness(Brightness=target, Timeout=1)
         targets.append(target)
     if not targets:
         raise BrightnessError("当前显示器没有可用的亮度写入接口")
