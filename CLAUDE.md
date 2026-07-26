@@ -124,6 +124,21 @@ nlu/
 
 **换 provider 前必须验证的事（对应第 8.9 节）**：两个协议都支持 tool use / function calling 是硬性前提（第 5 节意图解析要求 LLM 只输出结构化数据），换任何一个 provider 或中转站之前，先用一次性脚本单独测试目标端点是否真的支持结构化输出，不要等集成进 `intent_parser.py` 才发现不支持。
 
+### 2.2 云端 ASR / TTS provider（OpenAI 兼容，修订 45；本节修订 72 补写）
+
+> **文档修复说明（修订 72）**：本节能力在修订 45 落地（代码、config 注释、测试均引用"§2.2"），但当时 CLAUDE.md 漏写了本节（推测在"修订 45-50 累积"的合并提交中丢失），违反"先改文档再改代码"。本节按现行代码行为补写，无行为变更。
+
+**关键事实**：Anthropic 协议无音频端点（无 ASR、无 TTS），云端音频**只做 OpenAI 格式**——ASR 走 `/v1/audio/transcriptions`、TTS 走 `/v1/audio/speech`，无 anthropic 分支。本地引擎保持默认，云端 opt-in（改 config `provider` 字段才启用），行为可逆。
+
+**架构**（镜像 §2.1 的 nlu/ 多 provider 结构，业务层只依赖抽象接口 + 工厂，不感知本地/云端）：
+- **ASR**：`asr/asr_engine.py` 定义抽象基类 `ASREngine`（transcribe / warmup / close）、`ASRResult`、异常层级（含云端专用 `ASRRemoteError`）、共享 helper（`apply_opencc` 繁→简 / `finalize_result` 置信度过滤）和工厂 `build_asr_engine()`；`asr.provider: local`（默认）= `whisper_engine.WhisperEngine`（faster-whisper），`openai` = `asr/providers/openai_asr.py` 的 `OpenAIASREngine`
+- **TTS**：`tts/tts_base.py` 定义抽象基类 `BaseTTSEngine`（speak / speak_result / synthesize_pcm，内置 pyttsx3 SAPI5 后备——两条云路径失败时共用的最后一道降级）和工厂 `build_tts_engine()`；`tts.provider: edge`（默认）= edge-tts，`openai` = `tts/providers/openai_tts.py`；MP3 解码共享逻辑在 `tts/_audio.py`
+- **配置**：云端字段（`model` / `api_key_env` / `base_url` / `timeout`，TTS 另有 `tts_voice`）仅 `provider: openai` 时生效；api_key 经 `api_key_env` 指向的环境变量读取（§6 铁律不变，不进 config 明文）；复用意图解析层已装的 openai SDK，无新依赖
+
+**已知退化（§8.12）**：中转站的 verbose_json 响应可能缺置信度字段（no_speech_prob / avg_logprob），此时云端 ASR 无法做静音/噪声过滤，静音可能漏过滤——要可靠过滤请用本地 provider。
+
+**换端点前先探测（§8.9 同款纪律）**：并非所有中转都实现标准音频端点。实测（2026-07-26，修订 72）：某中转的 ASR/TTS 模型仅经 chat/completions 的 `input_audio` 多模态格式暴露，标准 `/v1/audio/transcriptions` 和 `/v1/audio/speech` 均 404，现有 provider 无法对接（对接需新增 provider 实现，属新能力面须走修订流程）。换云端音频端点前先跑 `tests/tools/probe_cloud_asr.py` 验证。
+
 ### Windows 安装说明
 
 ```powershell
@@ -152,7 +167,7 @@ pip install pywebview
 
 **API Key 管理**：不写入代码或 `config.yaml` 明文，从环境变量读取（Windows 下用"系统属性→环境变量"设置，变量名自定，如 `ANTHROPIC_API_KEY` 或 `OPENAI_API_KEY`），`config.yaml` 里只写 `api_key_env: ANTHROPIC_API_KEY` 这样的变量名引用，具体读哪个变量名由 `provider` 字段对应的实际部署决定，不强制变量名格式。**修订 19 放宽**：GUI 控制台可把 key 存进 gitignore 的本地文件 `voxctl.local.yaml`（机器写入），语音启动时由 `core/local_settings.py` 的 helper 读出、注入到该环境变量再供 `intent_parser` 读取——读取路径不变（仍从 env var 读），key 仍**不进 `config.yaml` 明文**；但该本地文件随 exe 文件夹走，**勿分享 / 传 git**，否则 key 泄露。见 §4、§6 与第 9 节修订 19。
 
-**GPU 加速（可选，非 MVP 必需）**：faster-whisper 若要用 GPU，需要安装 CUDA 版 PyTorch/CTranslate2，Windows 上配置较繁琐，MVP 阶段一律用 CPU 模式跑，模型默认用 `small`（约 500MB）。实测 `base` 模型（约 150MB）在安静环境下 10 句清晰指令中仅 1 句完全正确，CER 远超 10% 阈值，已按升级触发条件切换到 `small`（Step 2 实测验收，见第 9 节变更记录）。若 `small` 仍不达标，再考虑 `medium`。GPU 加速留到性能优化阶段再做。
+**GPU 加速（可选，非 MVP 必需）**：faster-whisper 若要用 GPU，需要安装 CUDA 版 PyTorch/CTranslate2，Windows 上配置较繁琐，一律先用 CPU 模式跑，模型默认用 `medium`（约 1.5GB，修订 72）。升级链实测记录：`base`（约 150MB）安静环境 10 句仅 1 句全对，CER 远超 10% 阈值 → 切 `small`（约 500MB，Step 2 验收）；修订 72 发布验收中 `small` 在实测麦克风环境 CER 14.8%~23% 不达标（调麦克风增益无效，RMS 不变）→ 切 `medium`（同批录音 CER 3.3%~6.6% 达标）。**已知代价**：CPU 上 `medium` 单句转写 4~5s，§7 端到端延迟 <5s 指标无法满足，记为已知限制（用户明确选择准确率优先，见 CHANGELOG 修订 72）。`large-v3-turbo` 已测不可取——它只砍解码层，编码器仍是 large-v3 规格，短指令场景耗时大头在编码器，实测 6.8~9.7s/句比 medium 更慢。GPU 加速（本机 CUDA 或云端）留到性能优化阶段做，是解开"准确率-延迟"矛盾的正路。
 
 ### 启动与退出方式
 
@@ -193,7 +208,11 @@ Voxctl/
 │
 ├── asr/
 │   ├── __init__.py
-│   └── whisper_engine.py      # faster-whisper 封装
+│   ├── asr_engine.py          # ASR 抽象层（修订 45）：ASREngine 基类 + ASRResult/异常层级 + build_asr_engine() 工厂，见 §2.2
+│   ├── providers/
+│   │   ├── __init__.py
+│   │   └── openai_asr.py      # 云端 ASR：OpenAI 兼容 /v1/audio/transcriptions（修订 45，§2.2/§8.12）
+│   └── whisper_engine.py      # faster-whisper 封装（provider=local 默认）
 │
 ├── nlu/
 │   ├── __init__.py
@@ -232,7 +251,12 @@ Voxctl/
 │
 ├── tts/
 │   ├── __init__.py
-│   └── edge_tts_engine.py     # Edge TTS 封装 + 流式播放管线 + pyttsx3 本地后备（修订 34）
+│   ├── tts_base.py            # TTS 抽象层（修订 45）：BaseTTSEngine 基类（内置 pyttsx3 后备）+ build_tts_engine() 工厂，见 §2.2
+│   ├── _audio.py              # MP3 解码共享工具（修订 45）：edge-tts 与云端 TTS 共用
+│   ├── providers/
+│   │   ├── __init__.py
+│   │   └── openai_tts.py      # 云端 TTS：OpenAI 兼容 /v1/audio/speech（修订 45，§2.2）
+│   └── edge_tts_engine.py     # Edge TTS 封装 + 流式播放管线 + pyttsx3 本地后备（修订 34；provider=edge 默认）
 │
 ├── ui/                         # Windows 轻量 UI 基础设施：纯 ctypes，非 Windows no-op
 │   ├── __init__.py
@@ -297,6 +321,11 @@ Voxctl/
 │   │   ├── test_phrase_match.py    # 唤醒词/听写退出文本匹配纯函数（27 例，修订 56）
 │   │   ├── test_text_input.py      # 听写文本注入 SendInput（11 例，控制字符跳过 + 非 Windows 降级，修订 56）
 │   │   ├── test_rev56_features.py  # 唤醒词/听写/多轮/度量/enter_dictation 接线集成（22 例，修订 56）
+│   │   ├── test_asr_provider.py    # ASR 抽象层 + 云端 provider（修订 45，§2.2/§8.12，网络全 mock）
+│   │   ├── test_tts_provider.py    # TTS 抽象层 + 云端 provider（修订 45，§2.2，网络全 mock）
+│   │   ├── test_tray.py            # 系统托盘状态单元测试（修订 59，Win32 全 mock）
+│   │   ├── test_security_review.py # 安全边界回归（白名单/路径/插件约束）
+│   │   ├── test_whisper_offline.py # 离线 Whisper 模型目录发现（修订 60）
 │   │   └── test_mainloop_integration.py  # MainLoop 集成冒烟测试（5 例，驱动真实 _main_loop while 循环，修订 39）
 │   ├── acceptance/             # 验收脚本默认手动运行；TTS 模板与主循环纯状态机模式进入 CI
 │   │   ├── __init__.py
@@ -308,7 +337,8 @@ Voxctl/
 │   │   ├── test_main_loop.py       # Step 6：默认纯状态机；--components 显式启用真实组件；--live 需全套
 │   │   └── test_gui_smoke.py       # GUI 窗口冒烟（需 pywebview 真实窗口）
 │   └── tools/                  # 诊断/探针脚本，不是测试
-│       └── probe_relay.py          # 中转站兼容性探针（换中转前手动跑，§8.9）
+│       ├── probe_relay.py          # 中转站兼容性探针（换中转前手动跑，§8.9）
+│       └── probe_cloud_asr.py      # 云端音频端点探针（换云端 ASR/TTS 端点前手动跑，§2.2，修订 72）
 │
 └── logs/                       # 运行时日志（不进 git）
     ├── actions.log              # 审计日志：执行动作 + 打断事件的 JSON lines（§6 强制）
@@ -341,9 +371,11 @@ vad:
   interrupt_threshold_speaker: 0.8     # 播报中打断判定阈值（外放模式，更保守）
 
 asr:
-  model_size: small              # 默认 small（base 实测 CER 不达标，已升级，见第 9 节）；仍不达标再评估 medium
-  device: cpu                    # cpu / cuda，MVP 固定 cpu
+  provider: local                # local = 本地 faster-whisper（默认）/ openai = 云端 OpenAI 兼容，见 §2.2
+  model_size: medium             # 默认 medium（修订 72：small 实测 CER 14.8%~23% 不达标；medium 达标但 CPU 单句 4~5s，延迟记为已知限制）
+  device: cpu                    # cpu / cuda，默认 cpu；GPU 留到性能优化阶段
   language: zh                   # ASR 识别语言（传给 faster-whisper），zh/en/ja 等；只改此项不影响 TTS/LLM 链路
+  # provider=openai 时另有 model / api_key_env / base_url / timeout 字段，见 §2.2 与 config.yaml 内注释
 
 llm:
   provider: anthropic             # anthropic / openai，决定用哪个 provider 实现，见第 2.1 节
@@ -352,8 +384,10 @@ llm:
   base_url: ""                    # 留空 = 走对应 provider 官方端点；非空指向中转站，见第 2.1 节
 
 tts:
+  provider: edge                  # edge = 本地 edge-tts（默认）/ openai = 云端 OpenAI 兼容，见 §2.2
   voice: zh-CN-XiaoxiaoNeural     # Edge TTS 中文音色，可替换
-  local_fallback: true             # pyttsx3 本地后备：edge-tts 网络异常时自动降级到 SAPI5（修订 34）
+  local_fallback: true             # pyttsx3 本地后备：edge-tts / 云端 TTS 失败时自动降级到 SAPI5（修订 34/45）
+  # provider=openai 时另有 model / tts_voice / api_key_env / base_url / timeout 字段，见 §2.2 与 config.yaml 内注释
 
 ui:
   hotkey: "ctrl+alt+v"            # 全局热键 toggle 语音启停（修订 33）；GUI 可改，覆盖写 voxctl.local.yaml
@@ -443,7 +477,7 @@ whitelist:
 
 6. **系统托盘状态（`ui.tray_enabled`）**：Windows 下用 stdlib `ctypes` 调 `Shell_NotifyIconW` 显示一个极简托盘图标，tooltip 随主循环阶段更新为“正在监听 / 正在识别 / 正在执行 / 正在播报 / 等待确认”；图标无菜单、无点击操作，不新增控制权限。关闭开关或非 Windows 时 no-op；程序退出必须删除图标。此功能不恢复修订 50 删除的悬浮窗，不引入 `pystray`/Pillow。
 
-7. **真离线 Whisper 分发（修订 60，构建时 opt-in）**：默认构建仍不携带约 460MB 的 `small` 模型，避免所有分发包无条件膨胀；需要离线包时，把 `VOXCTL_OFFLINE_MODEL_DIR` 指向一个已解析的 faster-whisper CTranslate2 模型目录（必须直接包含 `model.bin`、`config.json`、`tokenizer.json`、`vocabulary.txt`），再运行 `build_voice.bat` 或 `build_gui.bat`。脚本把目录打到固定的 PyInstaller `models/whisper`；冻结运行时 `WhisperEngine` 优先从 `sys._MEIPASS/models/whisper` 加载，存在即不访问 Hugging Face，不存在才保持原来的按模型名下载/缓存行为。固定目录避免 batch 脚本解析 YAML；离线目录中的模型版本由构建者负责与 `asr.model_size` 保持一致。构建脚本必须校验四个文件，不能产出“号称离线、实际缺权重”的包；不硬编码开发机缓存路径。
+7. **真离线 Whisper 分发（修订 60，构建时 opt-in）**：默认构建仍不携带 Whisper 模型（修订 72 起默认 `medium` snapshot 约 1.5GB，此前 `small` 约 460MB），避免所有分发包无条件膨胀；需要离线包时，把 `VOXCTL_OFFLINE_MODEL_DIR` 指向一个已解析的 faster-whisper CTranslate2 模型目录（必须直接包含 `model.bin`、`config.json`、`tokenizer.json`、`vocabulary.txt`），再运行 `build_voice.bat` 或 `build_gui.bat`。脚本把目录打到固定的 PyInstaller `models/whisper`；冻结运行时 `WhisperEngine` 优先从 `sys._MEIPASS/models/whisper` 加载，存在即不访问 Hugging Face，不存在才保持原来的按模型名下载/缓存行为。固定目录避免 batch 脚本解析 YAML；离线目录中的模型版本由构建者负责与 `asr.model_size` 保持一致。构建脚本必须校验四个文件，不能产出“号称离线、实际缺权重”的包；不硬编码开发机缓存路径。
 
 8. **天气查询（`plugins/weather_query.py`，修订 61）**：意图 `weather_query` 必须接收用户明确说出的 `city`，以及 `period=current/today/tomorrow`。插件先用 Open-Meteo 地理编码取首个匹配城市，再查询当前天气和两天逐日预报，格式化为简短中文供现有 TTS 播报；不定位、不按时区猜城市、不保存默认城市。只使用 stdlib `urllib` 对 `geocoding-api.open-meteo.com` 和 `api.open-meteo.com` 发固定 HTTPS GET，请求超时 5 秒；不加新依赖，不做缓存、重试、空气质量、生活指数或逐小时预报。
 
@@ -585,7 +619,7 @@ whitelist:
 | 意图解析准确率 | 固定指令集（打开应用/查状态/开文件/执行命令）解析正确率 100% |
 | 执行成功率 | 白名单内操作执行成功率 > 95%（失败需明确报错原因） |
 | 白名单拦截率 | 白名单外操作拦截率 100%，不允许任何绕过 |
-| 端到端延迟 | 说完话到开始播报反馈，< 5 秒（CPU 模式下） |
+| 端到端延迟 | 说完话到开始播报反馈，< 5 秒（CPU 模式下）。**已知限制（修订 72）**：默认模型改 `medium` 后 CPU 单句转写即需 4~5s，端到端实测超标；这是"CER 达标 vs 延迟达标"二选一下用户明确选择准确率优先的结果（small 可回退满足延迟但 CER 14.8%~23% 不达标）。解开矛盾靠 GPU（性能优化阶段） |
 | 连续运行稳定性 | 连续运行 30 分钟不崩溃、不内存泄漏 |
 | 打断响应延迟 | 用户开口打断到播报实际停止，< 500ms（两种模式一致，判定后停止速度不受模式影响） |
 | 打断误触发率（耳机模式） | 播报期间无人说话，误判为打断 < 1 次/20 分钟 |
@@ -671,12 +705,31 @@ whitelist:
 - **修订 18：语音主程序打包为独立 exe**（用户需求：拷到没装 Python 的电脑上跑），关键决策：
   - **只能 onedir，不能 onefile**：打包产物本体约 730MB（`_internal/` 里 torch_cpu.dll 291MB + ctranslate2.dll 57MB + onnxruntime 等；CPU torch，装 CUDA torch 会更大）。onefile 每次启动都要把这几百 MB 重新解压到临时目录，明显拖慢启动，不划算。onedir 产出 `dist/voxctl/voxctl.exe` + `_internal/` 文件夹，拷**整个文件夹**到目标机，启动秒级。
   - **native / data 依赖必须显式 collect**，漏一个运行时才炸：ctranslate2（native DLL）、faster_whisper、onnxruntime（native DLL，跑 VAD 的 `.onnx`）、opencc（转换字典）、sounddevice（PortAudio DLL）、anthropic/openai（tokenizer/证书数据）。两个 provider 用 `--hidden-import` 兜底（`build_client` 经抽象层选 provider，静态分析可能跟不到）。全部写在 `build_voice.bat` 里。**修订 21 起去掉 torch/silero_vad 的 collect，改 `--add-data audio\silero_vad.onnx` + `--exclude-module torch --exclude-module torchaudio`**——VAD 已改 onnxruntime 直跑 onnx（见 §2），torch 不再被任何代码 import，显式 exclude 防它经某条残留路径被静态分析拖回来（-470MB）。
-  - **Whisper 模型默认不打进 exe，离线包显式 opt-in（修订 60）**：普通构建仍按模型名从 HF 首次下载并缓存；离线构建先设置 `VOXCTL_OFFLINE_MODEL_DIR=<已解析的 CTranslate2 模型目录>`，两个 build 脚本会校验关键文件并用 `--add-data` 打到固定目录 `models/whisper`。冻结运行时从 `sys._MEIPASS` 自动发现该目录，存在则直接传本地路径给 `WhisperModel`，目标机无需联网。当前 `small` snapshot 实际约 464MB，离线包体积相应增加；不直接打整个 HF hub（其中 blobs/snapshots 硬链接会重复计量）。
+  - **Whisper 模型默认不打进 exe，离线包显式 opt-in（修订 60）**：普通构建仍按模型名从 HF 首次下载并缓存；离线构建先设置 `VOXCTL_OFFLINE_MODEL_DIR=<已解析的 CTranslate2 模型目录>`，两个 build 脚本会校验关键文件并用 `--add-data` 打到固定目录 `models/whisper`。冻结运行时从 `sys._MEIPASS` 自动发现该目录，存在则直接传本地路径给 `WhisperModel`，目标机无需联网。修订 72 起默认模型为 `medium`（snapshot 约 1.5GB，此前 `small` 约 464MB），离线包体积相应增加；不直接打整个 HF hub（其中 blobs/snapshots 硬链接会重复计量）。
   - **config.yaml / user_apps.yaml / logs 不打进 exe**：与 webui 同理（config 要用户可改、user_apps 要可写、logs 运行时写）。`main.py` frozen 模式 `os.chdir` 到 exe 所在目录，这些文件按相对路径读写；`build_voice.bat` 打包后把 `config.yaml` 拷到 `dist/voxctl/` 旁边，目标机改这一份即可。
   - **API key 仍只从环境变量读（§6 铁律，不因"独立分发"松动）**：拷到目标机后必须在目标机 `setx ANTHROPIC_API_KEY <key>` 设好，否则启动即报 key 缺失。绝不把 key 写进 config 明文。
   - **console 模式（非 windowed）**：语音助手要在窗口里显示识别文本/日志，保留控制台窗口，与原 PowerShell 运行体验一致。
   - **插件随 exe 分发（修订 54）**：`plugins/` 下的 `.py` 是**运行时磁盘扫描**加载（`PluginRegistry.load_from_directory` 走 `Path("plugins").glob("*.py")`，读 exe 目录旁的源文件，不是冻结模块），所以 `--hidden-import plugins.xxx` **对它无效**。正确做法是打包后把 `plugins\*.py` 拷到 `dist\voxctl\plugins\`（与 config.yaml 同区处理，`build_voice.bat` / `build_gui.bat` 均已加）。同时**移除了修订 48 S4 强制把分发版 `plugins.enabled` 改成 false 的逻辑**——分发版现默认继承 config.yaml 的 `plugins.enabled=true`，音量/剪贴板插件在打包版可用；安全上仍有加载前 AST 扫描（§6 修订 47）兜底恶意插件文件。
 - **多 provider 的额外坑**：`nlu/providers/` 下两个 provider 文件只要都在代码里被 import（哪怕运行时只用一个），PyInstaller 静态分析就会把 `anthropic` 和 `openai` 两个 SDK 全部打进 exe，不会因为 `config.yaml` 里 `provider: anthropic` 就自动裁掉没用到的 `openai` 相关依赖。届时如果确定用户只会用固定的一种 provider，考虑在打包脚本层面用条件 import 或单独的打包配置排除掉另一个 SDK；如果两种都要保留给用户切换，接受体积代价即可，不用为了省这点体积牺牲切换灵活性。这个决策留到真正打包时再做，MVP 阶段不用管。
+
+### 8.11 全局热键的坑（修订 33；本节修订 72 补写）
+
+> 本节此前只存在于代码注释与 CHANGELOG（`ui/hotkey.py`、`audio/player.py`、`tests/unit/test_hotkey.py` 均引用"§8.11"），修订 72 按现行代码行为补写进本文件。
+
+- **坑**：Win32 `RegisterHotKey(NULL, ...)` 注册的热键消息 `WM_HOTKEY` 只投递到**注册它的线程**的消息队列——在主线程注册但没跑消息循环，热键永远收不到；热键还可能被别的程序占用，`RegisterHotKey` 直接返回 0。
+- **规避**（`ui/hotkey.py`，纯 ctypes 无新依赖）：
+  - 专用 daemon 线程内注册 + 跑 `GetMessageW` 消息循环；停止用 `PostThreadMessageW(tid, WM_QUIT)`，退出前 `UnregisterHotKey`（不释放会导致重启注册失败）
+  - 热键被占用 → 记录 `register_error` 供 GUI 回报，**不静默、也不崩**
+  - **失败不崩主循环原则**：`on_trigger` 回调在监听线程执行，抛异常一律吞掉——热键线程绝不能因回调出错而崩。该原则同样适用于其它旁路回调（如 `audio/player.py` 的打断 stop_callback：打断路径绝不能反噬主循环）
+  - 非 Windows 整体 no-op
+
+### 8.12 云端 ASR 中转站的置信度退化（修订 45；本节修订 72 补写）
+
+> 本节此前只存在于代码注释与 config 注释（`asr/asr_engine.py`、`asr/providers/openai_asr.py`、`config.yaml` 均引用"§8.12"），修订 72 补写进本文件。
+
+- **坑**：本地 faster-whisper 每个 segment 都带 `no_speech_prob` / `avg_logprob`，静音/噪声靠这两个字段过滤；云端 `/v1/audio/transcriptions` 请求 `response_format="verbose_json"` 才有同款字段，而**中转站可能只返回纯文本，或 verbose_json 缺置信度字段**——此时无法过滤，静音/噪声片段可能被当成有效指令流进意图解析。
+- **规避**：`OpenAIASREngine` 检测响应里有无置信度字段：有则沿用与本地相同的过滤阈值；无则退化为"只按空文本判 is_empty"并记日志，**不猜测、不伪造置信度**。对静音过滤有硬要求的场景用本地 provider（`asr.provider: local`）。
+- **换端点前先探测**：用 `tests/tools/probe_cloud_asr.py` 验证目标端点是否实现标准 `/v1/audio/transcriptions`、是否返回置信度字段（§2.2 实测记录：有中转仅经 chat/completions `input_audio` 格式暴露 ASR，标准端点 404，现有 provider 接不上）。
 
 ---
 

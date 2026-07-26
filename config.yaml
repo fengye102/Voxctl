@@ -45,9 +45,10 @@ asr:
   # ASR provider（CLAUDE.md §2.2）：local = 本地 faster-whisper（默认）/ openai = 云端 OpenAI 兼容
   # 云端只做 OpenAI 格式（Anthropic 无音频端点），下面 model/api_key_env/base_url/timeout 仅 provider=openai 时生效
   provider: local
-  # faster-whisper 模型大小：small（约 500MB）/ base / medium / large
-  # 默认 small：base 在安静环境下 CER 不达标（> 10%），已升级（CLAUDE.md §2）
-  model_size: small
+  # faster-whisper 模型大小：base / small（约 500MB）/ medium（约 1.5GB）/ large
+  # 默认 medium（修订 72）：small 实测 CER 14.8%~23% 不达标；medium CER 达标但
+  # CPU 单句 4~5s，端到端延迟记为已知限制（CLAUDE.md §2 / §7）
+  model_size: medium
   device: cpu   # cpu / cuda，MVP 固定 cpu
   compute_type: int8   # CPU 下 int8 最快，质量损失可忽略
   # ASR 识别语言：传给 faster-whisper 的 language 参数

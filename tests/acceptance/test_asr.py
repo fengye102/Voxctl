@@ -108,7 +108,7 @@ def run_offline(wav_dir: Path, model_size: str) -> None:
     print("── 人工核对说明 ──")
     print("对照录音音频和识别结果，统计字错误率（CER）。")
     print("CER < 10% → Step 2 验收通过（CLAUDE.md §7）。")
-    print("CER > 10% → 考虑升级模型到 small（CLAUDE.md §2 GPU 加速说明）。")
+    print("CER > 10% → 换更大模型或核对录音质量（CLAUDE.md §2 GPU 加速说明）。")
 
 
 # ------------------------------------------------------------------
@@ -186,8 +186,9 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Step 2 验收：ASR 准确率测试")
     ap.add_argument("--device", "-d", type=int, default=None,
                     help="sounddevice 输入设备索引（实时模式）")
-    ap.add_argument("--model", "-m", default="base",
-                    help="Whisper 模型大小：base / small / medium（默认 base）")
+    ap.add_argument("--model", "-m", default="medium",
+                    help="Whisper 模型大小：base / small / medium / large-v3-turbo"
+                         "（默认 medium，与 config.yaml 一致，修订 72）")
     mode = ap.add_mutually_exclusive_group(required=True)
     mode.add_argument("--live", action="store_true",
                       help="实时录音 + VAD + ASR 全流程")
