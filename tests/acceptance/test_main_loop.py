@@ -6,14 +6,18 @@
     - 二次确认流程正常（close_app 等危险操作）
     - "退出程序"语音指令能正常退出
 
-两种模式：
-    1. --live：真实麦克风 + 真实 LLM + 真实 TTS，完整端到端验收
-    2. --mock（默认）：用 MockAudioSource 注入预录音频，验证状态机流转正确
+三种模式：
+    1. 默认：纯状态机（mock LLM / 执行 / TTS），无网络和系统操作
+    2. --components：Mock 音频 + 真实 LLM / 执行 / TTS，可能操作系统
+    3. --live：真实麦克风 + 真实 LLM + 真实 TTS，完整端到端验收
 
 用法（PowerShell，已激活 venv）：
 
     # 状态机流程验证（无需麦克风/网络，快速）
     python -m tests.acceptance.test_main_loop
+
+    # Mock 音频 + 真实组件（需 LLM API key，可能操作系统）
+    python -m tests.acceptance.test_main_loop --components
 
     # 真实端到端验收（需麦克风 + LLM API key + 音频设备）
     python -m tests.acceptance.test_main_loop --live --device 1
@@ -319,12 +323,12 @@ def run_mock_scenarios(config: dict, scenarios: list[MockScenario]) -> tuple[int
     passed = 0
     total = len(scenarios)
 
-    # 检查 API key 是否可用，不可用则跳过真实 LLM 场景，只跑纯状态机
+    # 显式组件模式必须有 API key，不能静默降级成另一种测试
     import os
     api_key_set = bool(os.environ.get(config["llm"]["api_key_env"], "").strip())
     if not api_key_set:
-        print(f"[警告] {config['llm']['api_key_env']} 未设置，改跑纯状态机测试（mock LLM）")
-        return run_state_machine_only_tests(scenarios)
+        print(f"[错误] {config['llm']['api_key_env']} 未设置，无法运行 --components 模式")
+        return 0, total
 
     for i, sc in enumerate(scenarios, 1):
         print(f"\n--- 场景 {i}/{total}: {sc.name} ---")
@@ -670,9 +674,14 @@ async def run_live(config: dict, device_index: Optional[int] = None) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Step 6 主循环验收")
-    ap.add_argument(
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument(
         "--live", action="store_true",
         help="真实端到端验收（需麦克风 + LLM API）",
+    )
+    mode.add_argument(
+        "--components", action="store_true",
+        help="Mock 音频 + 真实 LLM/执行/TTS（需 API key，可能操作系统）",
     )
     ap.add_argument(
         "--device", type=int, default=None,
@@ -705,7 +714,7 @@ def main() -> int:
     if args.live:
         return asyncio.run(run_live(config, args.device))
 
-    # Mock 模式
+    # 非 live 模式共用场景过滤
     scenarios = SCENARIOS
     if args.scenario:
         scenarios = [s for s in SCENARIOS if args.scenario in s.name]
@@ -713,7 +722,10 @@ def main() -> int:
             print(f"[错误] 没有匹配的场景: {args.scenario}", file=sys.stderr)
             return 1
 
-    passed, total = run_mock_scenarios(config, scenarios)
+    if args.components:
+        passed, total = run_mock_scenarios(config, scenarios)
+    else:
+        passed, total = run_state_machine_only_tests(scenarios)
     print(f"\n=== 总计 {passed}/{total} 场景通过 ===")
     return 0 if passed == total else 1
 

@@ -25,7 +25,7 @@
 | [user_apps.yaml](user_apps.yaml) | GUI 维护的**用户别名表**（应用名→exe/.lnk 路径，机器写入，gitignore）。启动时合并进 `whitelist.apps`，config.yaml 同名优先。独立成文件是为了不破坏 config.yaml 的注释。（当前工作区可能尚未生成。） |
 | [requirements.txt](requirements.txt) | 依赖清单（宽松基线版本）。pydantic/anthropic/openai/numpy/sounddevice/onnxruntime/faster-whisper/opencc/psutil/edge-tts/pyttsx3/av(PyAV)/PyYAML/pywebview/keyring。注明修订 21 起用 onnxruntime 跑 VAD、去掉 torch。 |
 | [pyproject.toml](pyproject.toml) | pytest 与 Ruff 项目配置：测试收集范围、Python 路径和静态检查规则。 |
-| [.github/workflows/ci.yml](.github/workflows/ci.yml) | GitHub Actions CI：安装依赖，执行 Ruff、全量单元测试和离线 TTS 模板验收。 |
+| [.github/workflows/ci.yml](.github/workflows/ci.yml) | GitHub Actions CI：安装依赖，执行 Ruff、全量单元测试、离线 TTS 模板和主循环纯状态机验收。 |
 | [.gitignore](.gitignore) | 忽略规则。venv、logs、test_audio、打包产物、`voxctl.local.yaml` / `user_apps.yaml`（机器写入的本地状态）。 |
 
 ### 入口 / 启动脚本
@@ -169,7 +169,7 @@
 
 ## tests/ — 测试与诊断脚本
 
-分三层组织。默认 `pytest` 只收集 `tests/unit/`（`pyproject.toml` 配置）；验收脚本默认手动运行，其中 TTS `--templates-only` 纯函数模式由 CI 显式执行。诊断工具仍需手动运行。详见 [tests/README.md](tests/README.md)。
+分三层组织。默认 `pytest` 只收集 `tests/unit/`（`pyproject.toml` 配置）；验收脚本默认手动运行，其中 TTS `--templates-only` 与主循环默认纯状态机模式由 CI 显式执行。诊断工具仍需手动运行。详见 [tests/README.md](tests/README.md)。
 
 [tests/__init__.py](tests/__init__.py) 是测试包标记。
 
@@ -218,7 +218,7 @@
 | [test_intent_parser.py](tests/acceptance/test_intent_parser.py) | Step 3：意图解析准确率（打真实 LLM，两个 provider 各跑一遍，无 mock）。 |
 | [test_executor.py](tests/acceptance/test_executor.py) | Step 4：执行模块端到端（真实开关 notepad、查状态、开文件、跑命令、白名单拦截）。 |
 | [test_tts.py](tests/acceptance/test_tts.py) | Step 5：TTS 播报（默认需网络 + 音频设备；`--templates-only` 是纯函数可单独跑）。 |
-| [test_main_loop.py](tests/acceptance/test_main_loop.py) | Step 6：主循环状态机（默认 `--mock` 无需设备；`--live` 需全套真实环境）。 |
+| [test_main_loop.py](tests/acceptance/test_main_loop.py) | Step 6：默认纯状态机且无外部副作用；`--components` 显式启用真实 LLM/执行/TTS，`--live` 再启用真实麦克风。 |
 | [test_gui_smoke.py](tests/acceptance/test_gui_smoke.py) | GUI 窗口冒烟（需 pywebview 真实窗口，非交互，自动关闭）。 |
 
 ### tools/ — 诊断脚本（非测试）

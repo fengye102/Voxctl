@@ -298,14 +298,14 @@ Voxctl/
 │   │   ├── test_text_input.py      # 听写文本注入 SendInput（11 例，控制字符跳过 + 非 Windows 降级，修订 56）
 │   │   ├── test_rev56_features.py  # 唤醒词/听写/多轮/度量/enter_dictation 接线集成（22 例，修订 56）
 │   │   └── test_mainloop_integration.py  # MainLoop 集成冒烟测试（5 例，驱动真实 _main_loop while 循环，修订 39）
-│   ├── acceptance/             # 验收脚本默认手动运行；TTS --templates-only 纯函数模式进入 CI
+│   ├── acceptance/             # 验收脚本默认手动运行；TTS 模板与主循环纯状态机模式进入 CI
 │   │   ├── __init__.py
 │   │   ├── test_recorder_vad.py    # Step 1：录音闭环 + VAD（需麦克风，交互式）
 │   │   ├── test_asr.py             # Step 2：ASR 准确率（需麦克风或 wav 文件）
 │   │   ├── test_intent_parser.py   # Step 3：意图解析（打真实 LLM，需网络 + API key）
 │   │   ├── test_executor.py        # Step 4：执行模块端到端（真实开关 notepad 等）
 │   │   ├── test_tts.py             # Step 5：TTS 播报（默认需网络 + 音频设备）
-│   │   ├── test_main_loop.py       # Step 6：主循环（默认 --mock 无需设备；--live 需全套）
+│   │   ├── test_main_loop.py       # Step 6：默认纯状态机；--components 显式启用真实组件；--live 需全套
 │   │   └── test_gui_smoke.py       # GUI 窗口冒烟（需 pywebview 真实窗口）
 │   └── tools/                  # 诊断/探针脚本，不是测试
 │       └── probe_relay.py          # 中转站兼容性探针（换中转前手动跑，§8.9）
