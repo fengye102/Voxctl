@@ -98,6 +98,8 @@ ui:
   hotkey: "ctrl+alt+v"
   #   false = 不注册全局热键；热键被占用时启动会记日志并跳过
   hotkey_enabled: true
+  # 系统托盘状态图标（修订 59）：只展示监听/识别/执行/播报状态，无点击操作
+  tray_enabled: true
 
 plugins:
   # 插件机制总开关（修订 42）：true = 扫描 plugins/ 加载自定义意图；false = 不加载

@@ -266,6 +266,33 @@ class TestLocalReminder(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(task.cancelled() for task in tasks))
 
 
+class TestStatusTray(unittest.IsolatedAsyncioTestCase):
+
+    async def test_main_loop_pushes_current_state(self):
+        tray = MagicMock()
+        loop = _build_loop(status_tray=tray)
+        loop._state.transition(State.LISTEN)
+
+        async def finish_listen():
+            loop._state.exit_requested = True
+
+        loop._phase_listen = AsyncMock(side_effect=finish_listen)
+        await loop._main_loop()
+
+        tray.update.assert_called_once_with("listen")
+
+    async def test_run_starts_and_stops_tray(self):
+        tray = MagicMock()
+        tray.start.return_value = None
+        loop = _build_loop(status_tray=tray)
+        loop._main_loop = AsyncMock()
+
+        await loop.run()
+
+        tray.start.assert_called_once_with()
+        tray.stop.assert_called_once_with()
+
+
 # ======================================================================
 # 测试：投机 ASR（P2 #11）
 # ======================================================================

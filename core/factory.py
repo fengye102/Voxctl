@@ -92,6 +92,11 @@ def create_from_config(config: dict) -> "MainLoop":
     dictation_cfg = config.get("dictation", {}) or {}
     context_cfg = config.get("context", {}) or {}
     metrics_cfg = config.get("metrics", {}) or {}
+    ui_cfg = config.get("ui", {}) or {}
+    status_tray = None
+    if ui_cfg.get("tray_enabled", True):
+        from ui.tray import StatusTray
+        status_tray = StatusTray()
 
     return MainLoop(
         recorder=recorder,
@@ -109,6 +114,7 @@ def create_from_config(config: dict) -> "MainLoop":
         dictation_exit_phrases=list(dictation_cfg.get("exit_phrases", []) or []),
         multi_turn=bool(context_cfg.get("multi_turn", True)),
         metrics_enabled=bool(metrics_cfg.get("enabled", True)),
+        status_tray=status_tray,
     )
 
 

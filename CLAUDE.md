@@ -230,9 +230,10 @@ Voxctl/
 │   ├── __init__.py
 │   └── edge_tts_engine.py     # Edge TTS 封装 + 流式播放管线 + pyttsx3 本地后备（修订 34）
 │
-├── ui/                         # 全局热键监听（修订 33/50）：纯 ctypes，非 Windows no-op
+├── ui/                         # Windows 轻量 UI 基础设施：纯 ctypes，非 Windows no-op
 │   ├── __init__.py
-│   └── hotkey.py               # Win32 RegisterHotKey + daemon 消息循环线程，toggle 语音（修订 33，修订 50 起本目录只剩此文件）
+│   ├── hotkey.py               # Win32 RegisterHotKey + daemon 消息循环线程，toggle 语音（修订 33）
+│   └── tray.py                 # Win32 Shell_NotifyIcon 状态托盘：监听/识别/执行/播报（修订 59）
 │
 ├── core/
 │   ├── __init__.py
@@ -349,6 +350,7 @@ tts:
 ui:
   hotkey: "ctrl+alt+v"            # 全局热键 toggle 语音启停（修订 33）；GUI 可改，覆盖写 voxctl.local.yaml
   hotkey_enabled: true            # 是否注册全局热键（修订 50 起浮窗已删，热键是唯一 toggle 入口之一，另入口是 GUI 控制台按钮）
+  tray_enabled: true              # 是否显示语音状态托盘图标（修订 59；纯状态展示，无操作入口）
 
 plugins:
   enabled: true                   # 插件机制总开关（修订 42）；false = 不扫描 plugins/，LLM schema 不含插件意图
@@ -408,7 +410,7 @@ whitelist:
 - **更精确的设备类型识别**：MVP 用设备名关键词匹配，检测不准时依赖用户手动覆盖。更可靠的方式（如检测音频接口类型、蓝牙协议判断）留到后续优化。
 - **GPU 加速**：CPU 模式够用就行。
 - **多说话人区分**：不做声纹识别，也不做"是不是同一个人打断"的判断。
-- **图形界面**：语音是唯一的主交互通道，不做语音流程相关的 GUI。修订 16 松动一条口子：允许一个**本地管理控制台**（`webui/`）用于别名注册、解析测试和审计日志查看。**修订 19 再松一条**：把该控制台做成 **PyWebView 原生窗口**（`webui/gui.py`，无浏览器 / 无 localhost，走 js_api 桥）作为 GUI exe 的"应用正脸"——除维护功能外，新增**改 LLM 配置**（base_url / model / api_key，写入 `voxctl.local.yaml`）和**启停语音交互**（子进程方式）。**修订 24**：删掉早期的浏览器版（`webui/server.py` 的 stdlib http 服务 + `webui.bat` + `build_console.bat`），只保留 PyWebView GUI 版——两版长期并存是重复维护，GUI 版已完全覆盖浏览器版功能；GUI 复用的底层（`ConsoleState` / 别名读写 / `validate_alias` / frozen 路径解析）从 server.py 内联进 `webui/gui.py`。定位仍是配置 / 生命周期 / 维护工具，**不替代语音**：控制电脑仍只走语音 + 二次确认，语音主循环不依赖 GUI（GUI 只负责拉起 / 杀掉语音子进程），不跑 GUI 语音功能完全不受影响。系统托盘状态图标仍属延后项。
+- **图形界面**：语音是唯一的主交互通道，不做语音流程相关的重 GUI。修订 16 松动一条口子：允许一个**本地管理控制台**（`webui/`）用于别名注册、解析测试和审计日志查看。**修订 19 再松一条**：把该控制台做成 **PyWebView 原生窗口**（`webui/gui.py`，无浏览器 / 无 localhost，走 js_api 桥）作为 GUI exe 的"应用正脸"——除维护功能外，新增**改 LLM 配置**（base_url / model / api_key，写入 `voxctl.local.yaml`）和**启停语音交互**（子进程方式）。**修订 24**：删掉早期的浏览器版（`webui/server.py` 的 stdlib http 服务 + `webui.bat` + `build_console.bat`），只保留 PyWebView GUI 版——两版长期并存是重复维护，GUI 版已完全覆盖浏览器版功能；GUI 复用的底层（`ConsoleState` / 别名读写 / `validate_alias` / frozen 路径解析）从 server.py 内联进 `webui/gui.py`。定位仍是配置 / 生命周期 / 维护工具，**不替代语音**：控制电脑仍只走语音 + 二次确认，语音主循环不依赖 GUI（GUI 只负责拉起 / 杀掉语音子进程），不跑 GUI 语音功能完全不受影响。修订 59 新增的系统托盘只展示主循环状态，不提供执行入口，也不恢复修订 50 删除的浮窗。
 - **跨设备/远程控制**：仅本机操作。
 
 ### 边界情况（做，但明确降级策略）
@@ -430,6 +432,8 @@ whitelist:
 4. **度量埋点（`metrics`，纯加法，不碰边界）**：每轮把各阶段延迟（ASR / 意图解析 / 执行 / "说完→开始播报" 毫秒，以及打断响应毫秒）写进审计日志 `logs/actions.log`（`core/audit.py` 的 `log_metrics`，`time.perf_counter` 计时），用于量化验证 §7 的延迟类指标，替代此前的人工感觉。不改变任何交互行为。
 
 5. **本地提醒（`plugins/reminder.py`）**：意图 `set_reminder` 接收 `delay_seconds`（1～86400 秒）和非空 `message`。插件只校验参数并返回结构化的提醒请求，不直接启动线程、不持有 TTS 或系统执行权限；`core/event_loop.py` 用 `asyncio` 定时，到期后把“提醒：{message}”排入现有 TTS 状态机，避免与当前播报争用音频。提醒只保存在当前进程内，程序退出即取消，不做持久化、重复提醒或提醒管理界面。
+
+6. **系统托盘状态（`ui.tray_enabled`）**：Windows 下用 stdlib `ctypes` 调 `Shell_NotifyIconW` 显示一个极简托盘图标，tooltip 随主循环阶段更新为“正在监听 / 正在识别 / 正在执行 / 正在播报 / 等待确认”；图标无菜单、无点击操作，不新增控制权限。关闭开关或非 Windows 时 no-op；程序退出必须删除图标。此功能不恢复修订 50 删除的悬浮窗，不引入 `pystray`/Pillow。
 
 ---
 
@@ -576,6 +580,7 @@ whitelist:
 | 多轮指代（开启时） | `context.multi_turn=true` 时，"关闭它"类指代能正确解析到上一条成功指令的目标（固定场景）；关闭开关退回每句独立 |
 | 度量埋点 | `metrics.enabled=true` 时每轮写一条 metrics 审计行，字段齐全（asr/intent/exec/说完→播报 毫秒），可据此核对 §7 延迟指标 |
 | 本地提醒 | 1～86400 秒的提醒能注册并在到期后经现有 TTS 播报；空文本/越界延迟 100% 拒绝；程序退出后不再触发 |
+| 系统托盘状态 | Windows 下启动后显示托盘图标，LISTEN/ASR/EXECUTE/TTS/AWAIT_CONFIRM 的 tooltip 与状态一致；退出后图标删除；关闭配置时不启动 |
 
 每个 Step 完成后跑对应测试，不要等到 Step 6 才一起测。
 

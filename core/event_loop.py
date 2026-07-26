@@ -78,6 +78,7 @@ class MainLoop:
         dictation_exit_phrases: Optional[list[str]] = None,
         multi_turn: bool = False,
         metrics_enabled: bool = False,
+        status_tray=None,
     ) -> None:
         self._recorder = recorder
         self._vad = vad
@@ -102,6 +103,7 @@ class MainLoop:
         self._last_context: Optional[str] = None
         # 修订 56 度量埋点：各阶段 perf_counter 时间戳（每轮 LISTEN emit 时重置）
         self._metrics_enabled = metrics_enabled
+        self._status_tray = status_tray
         self._t_speech_end: Optional[float] = None
         self._t_asr_done: Optional[float] = None
         self._t_intent_done: Optional[float] = None
@@ -153,6 +155,11 @@ class MainLoop:
 
         asyncio.create_task(asyncio.to_thread(self._asr.warmup))
 
+        if self._status_tray is not None:
+            error = self._status_tray.start()
+            if error:
+                _LOG.warning("系统托盘未启动: %s", error)
+
         mode_cn = "耳机" if self._output_mode == OutputMode.HEADPHONE else "外放"
         if self._output_mode == OutputMode.HEADPHONE:
             interrupt_cn = "开启（播报期间可语音打断）"
@@ -177,6 +184,8 @@ class MainLoop:
             await self._main_loop()
         finally:
             await self._cancel_reminders()
+            if self._status_tray is not None:
+                self._status_tray.stop()
             self._recorder.stop()
             self._intent_parser.close()
             _LOG.info("=== Voxctl 主循环已退出 ===")
@@ -187,6 +196,8 @@ class MainLoop:
         """核心循环：按状态机分发。"""
         while not self._state.exit_requested:
             try:
+                if self._status_tray is not None:
+                    self._status_tray.update(self._state.state.value)
                 if self._state.state == State.LISTEN:
                     await self._phase_listen()
                 elif self._state.state == State.ASR:
