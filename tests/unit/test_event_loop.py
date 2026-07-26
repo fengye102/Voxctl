@@ -19,7 +19,7 @@ import sys
 import unittest
 from pathlib import Path
 from typing import Optional
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
 
@@ -38,6 +38,7 @@ from nlu.schema import (
     ConfirmIntent,
     ExitProgramIntent,
     OpenAppIntent,
+    PluginIntent,
     UnknownIntent,
 )
 from tts.edge_tts_engine import TTSSynthesizeError, format_result
@@ -180,6 +181,89 @@ class TestPhaseListen(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(loop._state.state, State.ASR)
         self.assertIsNotNone(loop._pending_audio)
+
+    async def test_due_reminder_transitions_to_tts_before_audio(self):
+        loop = _build_loop()
+        loop._state.transition(State.LISTEN)
+        await loop._reminder_queue.put(ExecutionResult(
+            success=True,
+            action_type="reminder_due",
+            payload={"message": "提醒：开会"},
+        ))
+
+        await loop._phase_listen()
+
+        self.assertEqual(loop._state.state, State.TTS)
+        self.assertEqual(loop._pending_result.payload["message"], "提醒：开会")
+
+
+class TestLocalReminder(unittest.IsolatedAsyncioTestCase):
+
+    async def test_execute_registers_valid_reminder(self):
+        result = ExecutionResult(
+            success=True,
+            action_type="set_reminder",
+            payload={
+                "message": "好的，1分钟后提醒你：休息",
+                "reminder": {"delay_seconds": 60, "message": "休息"},
+            },
+        )
+        loop = _build_loop(executor=_make_executor(result))
+        loop._pending_intent = PluginIntent(
+            intent="set_reminder",
+            params={"delay_seconds": 60, "message": "休息"},
+        )
+        loop._pending_text = "一分钟后提醒我休息"
+        loop._state.transition(State.EXECUTE)
+
+        await loop._phase_execute()
+
+        self.assertEqual(loop._state.state, State.TTS)
+        self.assertEqual(len(loop._reminder_tasks), 1)
+        await loop._cancel_reminders()
+
+    async def test_register_enqueues_due_result(self):
+        loop = _build_loop()
+        result = ExecutionResult(
+            success=True,
+            action_type="set_reminder",
+            payload={
+                "message": "好的，1秒后提醒你：休息",
+                "reminder": {"delay_seconds": 1, "message": "休息"},
+            },
+        )
+
+        with patch("core.event_loop.asyncio.sleep", new=AsyncMock()):
+            loop._register_reminder(result)
+            tasks = list(loop._reminder_tasks)
+            await asyncio.gather(*tasks)
+
+        due = loop._reminder_queue.get_nowait()
+        self.assertEqual(due.action_type, "reminder_due")
+        self.assertEqual(due.payload["message"], "提醒：休息")
+
+    async def test_invalid_request_is_not_scheduled(self):
+        loop = _build_loop()
+        loop._register_reminder(ExecutionResult(
+            success=True,
+            action_type="set_reminder",
+            payload={"reminder": {"delay_seconds": 0, "message": "休息"}},
+        ))
+        self.assertFalse(loop._reminder_tasks)
+
+    async def test_cancel_reminders_stops_pending_tasks(self):
+        loop = _build_loop()
+        loop._register_reminder(ExecutionResult(
+            success=True,
+            action_type="set_reminder",
+            payload={"reminder": {"delay_seconds": 60, "message": "休息"}},
+        ))
+        tasks = list(loop._reminder_tasks)
+
+        await loop._cancel_reminders()
+
+        self.assertFalse(loop._reminder_tasks)
+        self.assertTrue(all(task.cancelled() for task in tasks))
 
 
 # ======================================================================

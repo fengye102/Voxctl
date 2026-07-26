@@ -110,6 +110,8 @@ class MainLoop:
 
         self._state = LoopState()
         self._audio_queue: asyncio.Queue[np.ndarray] = asyncio.Queue()
+        self._reminder_queue: asyncio.Queue[ExecutionResult] = asyncio.Queue()
+        self._reminder_tasks: set[asyncio.Task] = set()
         self._loop: Optional[asyncio.AbstractEventLoop] = None
 
         # Step 7 打断协调器（复用 VAD + player + queue）
@@ -174,6 +176,7 @@ class MainLoop:
         try:
             await self._main_loop()
         finally:
+            await self._cancel_reminders()
             self._recorder.stop()
             self._intent_parser.close()
             _LOG.info("=== Voxctl 主循环已退出 ===")
@@ -222,6 +225,14 @@ class MainLoop:
         有意义语音，剩余 ~480ms 纯等静默确认。此期间抢先启动 ASR 转录，
         最终 segment 到达时直接用结果，省掉等待时间。
         """
+        try:
+            self._pending_result = self._reminder_queue.get_nowait()
+        except asyncio.QueueEmpty:
+            pass
+        else:
+            self._state.transition(State.TTS)
+            return
+
         chunk = await self._audio_queue.get()
         segment = self._vad.process_chunk(chunk, mode=VADMode.LISTEN)
 
@@ -448,6 +459,7 @@ class MainLoop:
                 error=f"执行异常: {type(exc).__name__}: {exc}",
             )
         self._pending_result = result
+        self._register_reminder(result)
 
         self._t_exec_done = time.perf_counter()
         # 多轮上下文（修订 56）：成功的可执行指令更新"上一条摘要"，供下轮指代消解。
@@ -588,6 +600,48 @@ class MainLoop:
         if segment is not None:
             self._pending_audio = segment
             self._state.transition(State.ASR)
+
+    # ==================================================================
+    # 本地提醒（修订 58）
+    # ==================================================================
+
+    def _register_reminder(self, result: ExecutionResult) -> None:
+        """把提醒插件返回的结构化请求注册为进程内 asyncio 定时任务。"""
+        if not result.success or result.action_type != "set_reminder":
+            return
+        reminder = result.payload.get("reminder")
+        if not isinstance(reminder, dict):
+            return
+        delay = reminder.get("delay_seconds")
+        message = reminder.get("message")
+        if (isinstance(delay, bool) or not isinstance(delay, int)
+                or not 1 <= delay <= 86400
+                or not isinstance(message, str) or not message.strip()):
+            _LOG.warning("忽略无效提醒请求: %r", reminder)
+            return
+
+        task = asyncio.create_task(
+            self._enqueue_reminder(delay, message.strip()),
+            name="local_reminder",
+        )
+        self._reminder_tasks.add(task)
+        task.add_done_callback(self._reminder_tasks.discard)
+
+    async def _enqueue_reminder(self, delay_seconds: int, message: str) -> None:
+        await asyncio.sleep(delay_seconds)
+        await self._reminder_queue.put(ExecutionResult(
+            success=True,
+            action_type="reminder_due",
+            payload={"message": f"提醒：{message}"},
+        ))
+
+    async def _cancel_reminders(self) -> None:
+        tasks = list(self._reminder_tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._reminder_tasks.clear()
 
     # ==================================================================
     # 打断处理
