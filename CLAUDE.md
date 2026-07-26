@@ -224,7 +224,9 @@ Voxctl/
 │   ├── window_control.py       # 窗口/桌面插件（修订 55）：ctypes 组合键（显示桌面/最小化/恢复/切换窗口）
 │   ├── system_shortcuts.py     # 系统快捷插件（修订 55）：锁屏 LockWorkStation + 截图 Win+Shift+S，均非破坏性
 │   ├── datetime_query.py       # 时间日期查询插件（修订 55）：datetime 纯只读，TTS 模板报时/报日期，跨平台
-│   └── power_status.py         # 电池状态插件（修订 55）：psutil.sensors_battery 查电量/充电，无电池台式机友好降级
+│   ├── power_status.py         # 电池状态插件（修订 55）：psutil.sensors_battery 查电量/充电，无电池台式机友好降级
+│   ├── reminder.py             # 本地一次性提醒插件（修订 58）：参数校验，定时与播报由主循环负责
+│   └── weather_query.py        # 天气查询插件（修订 61）：Open-Meteo 固定 HTTPS GET，城市必填
 │
 ├── tts/
 │   ├── __init__.py
@@ -286,6 +288,8 @@ Voxctl/
 │   │   ├── test_system_shortcuts.py # 系统快捷插件单元测试（10 例，修订 55）
 │   │   ├── test_datetime_query.py  # 时间日期插件单元测试（23 例，修订 55）
 │   │   ├── test_power_status.py    # 电池状态插件单元测试（9 例，修订 55）
+│   │   ├── test_reminder_plugin.py # 本地提醒插件单元测试（修订 58）
+│   │   ├── test_weather_plugin.py  # 天气插件单元测试（修订 61，网络全 mock）
 │   │   ├── test_phrase_match.py    # 唤醒词/听写退出文本匹配纯函数（27 例，修订 56）
 │   │   ├── test_text_input.py      # 听写文本注入 SendInput（11 例，控制字符跳过 + 非 Windows 降级，修订 56）
 │   │   ├── test_rev56_features.py  # 唤醒词/听写/多轮/度量/enter_dictation 接线集成（22 例，修订 56）
@@ -437,6 +441,8 @@ whitelist:
 
 7. **真离线 Whisper 分发（修订 60，构建时 opt-in）**：默认构建仍不携带约 460MB 的 `small` 模型，避免所有分发包无条件膨胀；需要离线包时，把 `VOXCTL_OFFLINE_MODEL_DIR` 指向一个已解析的 faster-whisper CTranslate2 模型目录（必须直接包含 `model.bin`、`config.json`、`tokenizer.json`、`vocabulary.txt`），再运行 `build_voice.bat` 或 `build_gui.bat`。脚本把目录打到固定的 PyInstaller `models/whisper`；冻结运行时 `WhisperEngine` 优先从 `sys._MEIPASS/models/whisper` 加载，存在即不访问 Hugging Face，不存在才保持原来的按模型名下载/缓存行为。固定目录避免 batch 脚本解析 YAML；离线目录中的模型版本由构建者负责与 `asr.model_size` 保持一致。构建脚本必须校验四个文件，不能产出“号称离线、实际缺权重”的包；不硬编码开发机缓存路径。
 
+8. **天气查询（`plugins/weather_query.py`，修订 61）**：意图 `weather_query` 必须接收用户明确说出的 `city`，以及 `period=current/today/tomorrow`。插件先用 Open-Meteo 地理编码取首个匹配城市，再查询当前天气和两天逐日预报，格式化为简短中文供现有 TTS 播报；不定位、不按时区猜城市、不保存默认城市。只使用 stdlib `urllib` 对 `geocoding-api.open-meteo.com` 和 `api.open-meteo.com` 发固定 HTTPS GET，请求超时 5 秒；不加新依赖，不做缓存、重试、空气质量、生活指数或逐小时预报。
+
 ---
 
 ## 5. 分步开发计划
@@ -519,6 +525,7 @@ whitelist:
   - `plugins/` 目录下的 `.py` 文件在启动时静态加载（`import` 模块 → 读 `PLUGIN_SPEC` 变量），加载失败的插件跳过并记日志，不阻断启动
   - 审计日志记录插件意图的执行（`action_type` = 插件意图名），与内置意图一致
   - **提醒插件不直接调用 TTS 或启动后台线程**：handler 只返回 `payload.reminder` 结构；主循环负责定时和播报。到期时若正在执行/播报，提醒进入队列，回到监听态后再播；程序退出时取消所有未到期提醒，避免后台任务越过进程生命周期。
+  - **天气插件只允许固定只读网络访问**：只向 `geocoding-api.open-meteo.com` 和 `api.open-meteo.com` 发 HTTPS GET，URL 由代码固定并用结构化参数编码；响应仅解析为天气数据和 TTS 文本，绝不打开响应中的链接、执行响应内容或发 POST/DELETE。城市必须由用户明确提供，不读取定位、不保存默认城市。
 
 ### 二次确认机制（强制）
 
@@ -584,6 +591,7 @@ whitelist:
 | 本地提醒 | 1～86400 秒的提醒能注册并在到期后经现有 TTS 播报；空文本/越界延迟 100% 拒绝；程序退出后不再触发 |
 | 系统托盘状态 | Windows 下启动后显示托盘图标，LISTEN/ASR/EXECUTE/TTS/AWAIT_CONFIRM 的 tooltip 与状态一致；退出后图标删除；关闭配置时不启动 |
 | 真离线 Whisper | 设置有效 `VOXCTL_OFFLINE_MODEL_DIR` 后构建产物含 `models/whisper` 且断网可加载；目录缺关键文件时构建立即失败；未设置时保持轻量联网首次下载行为 |
+| 天气查询 | 明确城市下 `current/today/tomorrow` 均能生成含城市、天气和温度的中文播报；空城市/非法时段/城市无结果/超时/坏响应均明确失败；单元测试不访问真实网络 |
 
 每个 Step 完成后跑对应测试，不要等到 Step 6 才一起测。
 
