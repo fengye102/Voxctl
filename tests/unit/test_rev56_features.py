@@ -31,7 +31,6 @@ from tests.unit.test_event_loop import (
     _make_asr,
     _make_executor,
     _make_parser,
-    _make_vad,
 )
 
 

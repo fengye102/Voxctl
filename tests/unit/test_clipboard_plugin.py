@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from plugins.clipboard_read import (
     PLUGIN_SPEC,
     _CF_UNICODETEXT,

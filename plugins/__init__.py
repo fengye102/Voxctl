@@ -58,14 +58,14 @@ def _scan_plugin_source_safety(source: str, filename: str) -> None:
             for alias in node.names:
                 if alias.name == "subprocess":
                     raise PluginLoadError(
-                        f"禁止 import subprocess（§6 修订 47）：插件不得直接执行系统命令"
+                        "禁止 import subprocess（§6 修订 47）：插件不得直接执行系统命令"
                     )
                 if alias.name == "os":
                     os_aliases.add(alias.asname or "os")
         elif isinstance(node, ast.ImportFrom):
             if node.module == "subprocess":
                 raise PluginLoadError(
-                    f"禁止 from subprocess import ...（§6 修订 47）"
+                    "禁止 from subprocess import ...（§6 修订 47）"
                 )
             if node.module == "os":
                 for alias in node.names:

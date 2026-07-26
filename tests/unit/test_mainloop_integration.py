@@ -34,7 +34,6 @@ if str(_PROJECT_ROOT) not in sys.path:
 from audio.output_mode import OutputMode
 from audio.vad import CHUNK_SAMPLES, VADMode
 from core.event_loop import MainLoop
-from core.state import State
 from executor import ExecutionResult
 from nlu.schema import (
     CloseAppIntent,

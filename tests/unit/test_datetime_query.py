@@ -5,8 +5,6 @@ from __future__ import annotations
 import datetime
 from pathlib import Path
 
-import pytest
-
 from plugins.datetime_query import (
     PLUGIN_SPEC,
     _build_message,

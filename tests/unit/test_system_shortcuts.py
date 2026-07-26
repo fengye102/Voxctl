@@ -5,8 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, call
 
-import pytest
-
 from plugins.system_shortcuts import (
     PLUGIN_SPEC,
     _KEYEVENTF_KEYUP,

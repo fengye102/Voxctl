@@ -5,8 +5,6 @@ from __future__ import annotations
 import types
 from pathlib import Path
 
-import pytest
-
 from plugins.power_status import (
     PLUGIN_SPEC,
     handle_power_status,
