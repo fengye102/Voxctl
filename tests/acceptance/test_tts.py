@@ -69,7 +69,7 @@ TEMPLATE_CASES: list[TemplateCase] = [
             error="应用 'word' 不在允许范围内",
             payload={"app_name": "word"},
         ),
-        expected="应用 'word' 不在允许范围内",
+        expected="这个应用不在允许范围内",
     ),
     TemplateCase(
         name="open_app 失败（路径不存在）",
@@ -78,7 +78,7 @@ TEMPLATE_CASES: list[TemplateCase] = [
             error="应用 'xyz' 的路径不存在: ...",
             payload={"app_name": "xyz"},
         ),
-        expected="应用 'xyz' 的路径不存在: ...",
+        expected="xyz 的安装路径不存在",
     ),
 
     # --- close_app ---
@@ -113,7 +113,7 @@ TEMPLATE_CASES: list[TemplateCase] = [
             error="应用 'word' 不在允许范围内",
             payload={"app_name": "word"},
         ),
-        expected="应用 'word' 不在允许范围内",
+        expected="这个应用不在允许范围内",
     ),
 
     # --- query_system ---
@@ -180,7 +180,7 @@ TEMPLATE_CASES: list[TemplateCase] = [
             error="路径不在允许范围内: C:\\Windows\\...",
             payload={"raw_path": "..."},
         ),
-        expected="路径不在允许范围内: C:\\Windows\\...",
+        expected="这个路径不在允许范围内",
     ),
     TemplateCase(
         name="open_file 失败（不存在）",
@@ -189,7 +189,7 @@ TEMPLATE_CASES: list[TemplateCase] = [
             error="文件不存在: ...",
             payload={"raw_path": "..."},
         ),
-        expected="文件不存在: ...",
+        expected="文件不存在",
     ),
 
     # --- run_command ---
