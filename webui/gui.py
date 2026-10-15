@@ -282,10 +282,22 @@ class Api:
             n = 30
         entries: list = []
         if _AUDIT_LOG.is_file():
-            lines = _AUDIT_LOG.read_text(encoding="utf-8").strip().splitlines()
-            for line in lines[-n:]:
+            # 审计日志可能长期增长；只从文件末尾读够 n 行，不把整份日志载入内存。
+            with _AUDIT_LOG.open("rb") as stream:
+                stream.seek(0, os.SEEK_END)
+                pos = stream.tell()
+                blocks: list[bytes] = []
+                newline_count = 0
+                while pos > 0 and newline_count <= n:
+                    start = max(0, pos - 8192)
+                    stream.seek(start)
+                    block = stream.read(pos - start)
+                    blocks.append(block)
+                    newline_count += block.count(b"\n")
+                    pos = start
+            for line in b"".join(reversed(blocks)).splitlines()[-n:]:
                 try:
-                    entries.append(json.loads(line))
+                    entries.append(json.loads(line.decode("utf-8", errors="replace")))
                 except json.JSONDecodeError:
                     continue
         entries.reverse()  # 最新在前
@@ -460,7 +472,8 @@ class Api:
             except Exception as exc:  # noqa: BLE001
                 return {"ok": False, "error": f"热键格式非法：{exc}"}
 
-        llm: dict = {}
+        # 空参数表示“不改该字段”，热键单独保存不能抹掉既有 LLM 覆盖。
+        llm: dict = dict(load_local_section("llm"))
         if provider:
             llm["provider"] = provider
         if model:
@@ -571,11 +584,12 @@ class Api:
         # 解析 api_key：前端传了用前端的，否则从 keyring/env 读
         if not api_key:
             if section == "llm":
-                env_name = _load_config_llm().get("api_key_env", "ANTHROPIC_API_KEY")
+                env_name = effective_llm_settings(_load_config_llm())["api_key_env"]
+                api_key = load_api_key(env_name, legacy_llm_env=env_name) or os.environ.get(env_name, "")
             else:
                 cfg = _load_config_section(section)
                 env_name = str(cfg.get("api_key_env", "OPENAI_API_KEY"))
-            api_key = load_api_key(env_name) or os.environ.get(env_name, "")
+                api_key = load_api_key(env_name) or os.environ.get(env_name, "")
 
         if not api_key:
             return {"ok": False, "error": "缺少 API Key，请先填写并保存"}

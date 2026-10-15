@@ -8,20 +8,65 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import threading
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from nlu.schema import safe_model_dump
 
+if os.name == "nt":
+    import msvcrt
+
 _LOG = logging.getLogger(__name__)
+_MAX_AUDIT_BYTES = 10 * 1024 * 1024
+_AUDIT_BACKUP_COUNT = 3
+_AUDIT_LOCK = threading.Lock()
+
+
+@contextmanager
+def _process_lock(path: Path):
+    """Serialize rotation across the GUI and voice processes on Windows."""
+    if os.name != "nt":
+        yield
+        return
+    with open(path, "a+b") as lock_file:
+        if lock_file.tell() == 0:
+            lock_file.write(b"\0")
+            lock_file.flush()
+        lock_file.seek(0)
+        msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+        try:
+            yield
+        finally:
+            lock_file.seek(0)
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+
+
+def _safe_payload(action_type: str, payload: dict) -> dict:
+    """Keep clipboard contents available to TTS without persisting them in audit logs."""
+    if action_type == "clipboard_read":
+        return {key: payload[key] for key in ("empty", "length", "truncated") if key in payload}
+    return payload
 
 
 def _write_entry(log_path: Path, entry: dict) -> None:
     try:
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        line = json.dumps(entry, ensure_ascii=False) + "\n"
+        with _AUDIT_LOCK:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with _process_lock(log_path.with_name(f"{log_path.name}.lock")):
+                if (log_path.exists()
+                        and log_path.stat().st_size + len(line.encode("utf-8")) > _MAX_AUDIT_BYTES):
+                    for index in range(_AUDIT_BACKUP_COUNT, 1, -1):
+                        older = log_path.with_name(f"{log_path.name}.{index - 1}")
+                        if older.exists():
+                            older.replace(log_path.with_name(f"{log_path.name}.{index}"))
+                    log_path.replace(log_path.with_name(f"{log_path.name}.1"))
+                with open(log_path, "a", encoding="utf-8") as f:
+                    f.write(line)
     except OSError as exc:
         _LOG.warning("failed to write audit log to %s: %s", log_path, exc)
 
@@ -45,7 +90,7 @@ def log_action(
         "needs_confirmation": result.needs_confirmation,
         "should_exit": result.should_exit,
         "error": result.error,
-        "payload": result.payload,
+        "payload": _safe_payload(result.action_type, result.payload),
         "interrupted": False,
         "interrupt_detail": None,
     }
@@ -121,3 +166,4 @@ def log_interrupt_event(
         },
     }
     _write_entry(log_path, entry)
+

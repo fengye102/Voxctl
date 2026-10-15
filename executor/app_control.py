@@ -15,8 +15,7 @@ close_app：查白名单 → 二次确认 → psutil 找进程并 terminate。
 进程匹配（修订 47 §6）：
     优先按完整路径匹配（proc.exe() resolve 后与白名单 app_path.resolve() 比对），
     避免误杀同名不同路径进程（如 portable chrome + system chrome）。
-    proc.exe() 取不到（权限不足/进程已退出）或完整路径一个都没匹配到时，
-    降级到文件名匹配（覆盖 chrome 多进程主程序同名场景）。
+    白名单中的 .lnk 先解析真实目标；路径不可确认时不按进程名降级关闭。
 """
 
 from __future__ import annotations
@@ -29,6 +28,7 @@ from typing import Optional
 import psutil
 
 from executor import ExecutionResult
+from executor import file_ops
 from executor.app_index import AppIndex, MatchStatus
 from executor.whitelist import Whitelist
 
@@ -153,57 +153,52 @@ class AppController:
             )
 
         # confirmed=True，实际执行关闭
-        exe_filename = app_path.name  # e.g. "chrome.exe"
+        # 白名单别名可能是快捷方式；关闭时必须比较其真实 exe 路径。
+        target_path = app_path
+        if app_path.suffix.lower() == ".lnk":
+            target_path = file_ops._resolve_lnk_target(app_path)
+            if target_path is None:
+                return ExecutionResult(
+                    success=False,
+                    action_type="close_app",
+                    error=f"应用 {app_name!r} 的快捷方式目标无法解析",
+                    payload={"app_name": app_name, "app_path": str(app_path)},
+                )
+        try:
+            app_path_resolved = target_path.resolve()
+        except (OSError, RuntimeError) as exc:
+            return ExecutionResult(
+                success=False,
+                action_type="close_app",
+                error=f"应用 {app_name!r} 的路径解析失败: {exc}",
+                payload={"app_name": app_name, "app_path": str(app_path)},
+            )
+
         terminated_pids: list[int] = []
         errors: list[str] = []
-        # 修订 48 S2：记录匹配来源，便于事后追查误杀是否走了降级路径
-        # "path" = 完整路径阶段命中；"name" = 降级文件名阶段命中；"none" = 无进程匹配
+        # "path" = 完整路径命中；"none" = 无进程匹配
         matched_via: str = "none"
 
-        # 修订 47 §6：优先按完整路径匹配进程，避免误杀同名不同路径进程
-        # （如 portable chrome + system chrome）。proc.exe() 取不到或完整路径
-        # 一个都没匹配到时，降级到文件名匹配（覆盖 chrome 多进程主程序同名场景）。
-        try:
-            app_path_resolved = app_path.resolve()
-        except (OSError, RuntimeError):
-            app_path_resolved = None
-
-        if app_path_resolved is not None:
-            # 第一阶段：完整路径匹配
-            for proc in psutil.process_iter(["pid", "name"]):
+        # 只按完整路径关闭，exe() 权限不足或不匹配时保持不动。
+        for proc in psutil.process_iter(["pid", "name"]):
+            try:
                 try:
-                    try:
-                        proc_exe = proc.exe()  # 完整 exe 路径，可能抛 AccessDenied
-                    except (psutil.AccessDenied, psutil.NoSuchProcess):
-                        continue
-                    if not proc_exe:
-                        continue
-                    try:
-                        if Path(proc_exe).resolve() == app_path_resolved:
-                            proc.terminate()  # 优雅关闭，发 SIGTERM
-                            terminated_pids.append(proc.info["pid"])
-                    except (OSError, RuntimeError):
-                        pass
-                except (psutil.NoSuchProcess, psutil.AccessDenied) as exc:
-                    _LOG.debug("terminate pid=%s failed: %s", proc.info.get("pid"), exc)
-                    errors.append(str(exc))
-            if terminated_pids:
-                matched_via = "path"
-
-        # 第二阶段：完整路径未匹配到任何进程时，降级文件名匹配
-        # （proc.exe() 全部 AccessDenied，或 chrome 多进程主程序同名场景）
-        if not terminated_pids:
-            for proc in psutil.process_iter(["pid", "name"]):
+                    proc_exe = proc.exe()  # 完整 exe 路径，可能抛 AccessDenied
+                except (psutil.AccessDenied, psutil.NoSuchProcess):
+                    continue
+                if not proc_exe:
+                    continue
                 try:
-                    proc_name = proc.info.get("name") or ""
-                    if proc_name.lower() == exe_filename.lower():
+                    if Path(proc_exe).resolve() == app_path_resolved:
                         proc.terminate()  # 优雅关闭，发 SIGTERM
                         terminated_pids.append(proc.info["pid"])
-                except (psutil.NoSuchProcess, psutil.AccessDenied) as exc:
-                    _LOG.debug("terminate pid=%s failed: %s", proc.info.get("pid"), exc)
-                    errors.append(str(exc))
-            if terminated_pids:
-                matched_via = "name"
+                except (OSError, RuntimeError):
+                    pass
+            except (psutil.NoSuchProcess, psutil.AccessDenied) as exc:
+                _LOG.debug("terminate pid=%s failed: %s", proc.info.get("pid"), exc)
+                errors.append(str(exc))
+        if terminated_pids:
+            matched_via = "path"
 
         if not terminated_pids:
             return ExecutionResult(
@@ -226,7 +221,8 @@ class AppController:
                 "app_path": str(app_path),
                 "terminated_pids": terminated_pids,
                 "terminated_count": len(terminated_pids),
-                "matched_via": matched_via,  # "path" 或 "name"
+                "matched_via": matched_via,
                 "errors": errors or None,
             },
         )
+
