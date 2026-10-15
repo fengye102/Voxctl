@@ -167,6 +167,17 @@ class FileOps:
                         "target_path": str(target),
                     },
                 )
+            if not self._whitelist.is_path_allowed(target):
+                return ExecutionResult(
+                    success=False,
+                    action_type="open_file",
+                    error=f"快捷方式目标路径不在允许范围内: {target}",
+                    payload={
+                        "raw_path": raw_path,
+                        "resolved_path": str(resolved),
+                        "target_path": str(target),
+                    },
+                )
         elif ext not in _ALLOWED_FILE_EXTENSIONS:
             return ExecutionResult(
                 success=False,
@@ -289,3 +300,4 @@ class FileOps:
             if any(kw in dir_name_lower for kw in name_keywords):
                 return base_dir
         return None
+

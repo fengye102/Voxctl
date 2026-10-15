@@ -85,9 +85,13 @@ def save_api_key(key: str, api_key_env: str = "ANTHROPIC_API_KEY") -> bool:
 def load_api_key(
     api_key_env: str = "ANTHROPIC_API_KEY",
     path: Union[str, Path, None] = None,
+    *,
+    legacy_llm_env: str | None = None,
 ) -> str:
     """Load API key: try OS keyring first, then fall back to yaml (migration compat).
 
+    The legacy yaml value belongs only to LLM's api_key_env. Older yaml files
+    have no env metadata, so their LLM caller supplies the effective config env.
     Returns the key string (stripped), or empty string if not found anywhere.
     """
     # 1. Try keyring
@@ -101,6 +105,9 @@ def load_api_key(
 
     # 2. Fallback: read from yaml (migration from pre-keyring versions)
     llm_local = load_local_llm(path)
+    yaml_env = str(llm_local.get("api_key_env") or legacy_llm_env or "").strip()
+    if api_key_env != yaml_env:
+        return ""
     yaml_key = llm_local.get("api_key")
     if yaml_key is not None and str(yaml_key).strip():
         _LOG.debug("API key loaded from yaml fallback (consider migrating to keyring)")
@@ -216,7 +223,7 @@ def apply_local_overrides(
     - llm.{provider, model, base_url}：本地文件里非空则覆盖 config['llm'] 对应字段
     - asr/tts：本地文件里非空则覆盖对应块字段（本地 + 云端字段并存，修订 46）
     - api_key：对 llm / asr / tts 三块各自 `api_key_env` 去重后逐个注入（修订 46）——
-      先查 OS keyring，再 fallback 到 yaml 旧值（迁移兼容）；非空则
+      先查 OS keyring；yaml 旧值只给 LLM 的 env fallback（迁移兼容），不串给 ASR/TTS；非空则
       os.environ[api_key_env] = key（**覆盖**已有 env）。语义是"GUI 改的 key 说了算"。
       云端 ASR/TTS 的 OPENAI_API_KEY 也经此注入，否则云端引擎构造即因缺 key 抛异常。
       intent_parser / 云端引擎读取路径不变（仍读 env var），key 不进 config。
@@ -240,15 +247,18 @@ def apply_local_overrides(
     _apply_section(config, "tts", data.get("tts"), _TTS_OVERRIDE_FIELDS)
 
     # --- api_key 注入（llm / asr / tts 各自 api_key_env，去重，修订 46）---
-    # api_key_env 保留在 config.yaml（非覆盖字段），三块可能指向不同变量名（如 llm 用
-    # ANTHROPIC_API_KEY、云端音频用 OPENAI_API_KEY），也可能相同——去重后逐个注入。
+    # api_key_env 取 config.yaml 与本地覆盖叠加后的生效值；三块可能指向不同变量名
+    # （如 llm 用 ANTHROPIC_API_KEY、云端音频用 OPENAI_API_KEY），也可能相同。
     seen_envs: set = set()
     for section in ("llm", "asr", "tts"):
         env_name = str(config.get(section, {}).get("api_key_env", "") or "").strip()
         if not env_name or env_name in seen_envs:
             continue
         seen_envs.add(env_name)
-        api_key = load_api_key(env_name, path)
+        api_key = load_api_key(
+            env_name, path,
+            legacy_llm_env=env_name if section == "llm" else None,
+        )
         if api_key:
             os.environ[env_name] = api_key
             _LOG.info(
@@ -295,7 +305,7 @@ def effective_llm_settings(
         if v is not None and str(v).strip() != "":
             merged[field] = v
     api_key_env = merged.get("api_key_env", "ANTHROPIC_API_KEY")
-    has_key = bool(load_api_key(api_key_env, path))
+    has_key = bool(load_api_key(api_key_env, path, legacy_llm_env=api_key_env))
     return {
         "provider": merged.get("provider", ""),
         "model": merged.get("model", ""),

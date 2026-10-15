@@ -360,7 +360,7 @@ class TestKeyring:
 
     def test_load_keyring_fails_yaml_fallback(self, tmp_path: Path) -> None:
         p = tmp_path / "local.yaml"
-        _write_yaml(p, {"llm": {"api_key": "yaml-fb"}})
+        _write_yaml(p, {"llm": {"api_key": "yaml-fb", "api_key_env": "ENV"}})
         mock_kr = MagicMock()
         mock_kr.get_password.side_effect = Exception("keyring broke")
         with patch.object(ls, "_keyring", mock_kr):

@@ -4,15 +4,15 @@
     在 TTS 播报期间，并发监听音频队列，用 VAD INTERRUPT 模式快速判定
     "用户是否在打断"。一旦判定为打断：
         1. 立即调 player.stop() 终止播报（sd.stop() 会让 await sd.wait() 返回）
-        2. 设置 interrupted 标志，让主循环据此清空状态、回到 LISTEN
+        2. 保存触发前的短预滚，让主循环回到 LISTEN 时继续收集本句话
 
 设计要点：
     - 与 TTS 播报并发跑（asyncio.create_task），TTS 结束后取消监听任务
     - 打断判定用快速路径（process_chunk_interrupt）：连续 N 帧概率超阈值即触发，
       不等完整 segment 结束，响应更快
     - 进入监听前必须 reset VAD，避免把 TTS 之前的尾音/键盘声误判为打断
-    - 打断后由主循环负责清空 audio_queue（drain_queue），避免回到 LISTEN 时
-      处理到带 TTS 泄漏的音频块
+    - 只保留有界预滚，不回放较早的 TTS 泄漏；耳机模式由 LISTEN 继续处理
+      触发后的队列，外放模式仍丢弃（回声误判风险更高）
 
 CLAUDE.md §5 Step 7 打断语义：
     - 打断发生时如果 state.pending is not None（待二次确认）：视为取消该操作，
@@ -25,13 +25,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import deque
 
 import numpy as np
 
 from audio.player import AudioPlayer
-from audio.vad import VADProcessor
+from audio.vad import PRE_ROLL_CHUNKS, VADProcessor
 
 _LOG = logging.getLogger(__name__)
+
+# VAD 默认需要两帧确认打断；再留正常 LISTEN 的预滚窗口，避免软字头丢失。
+# 有界窗口不把整段播报泄漏移交给 ASR。
+_HANDOFF_CHUNKS = PRE_ROLL_CHUNKS + 2
 
 
 class InterruptCoordinator:
@@ -48,7 +53,7 @@ class InterruptCoordinator:
             with contextlib.suppress(asyncio.CancelledError):
                 await monitor_task
         if coord.interrupted:
-            # 处理打断：清队列、清 pending、回 LISTEN
+            # 处理打断：移交 handoff_chunks、清 pending、回 LISTEN
             ...
     """
 
@@ -62,6 +67,7 @@ class InterruptCoordinator:
         self._player = player
         self._queue = audio_queue
         self._interrupted: bool = False
+        self._handoff_chunks: tuple[np.ndarray, ...] = ()
 
     # ------------------------------------------------------------------
     @property
@@ -69,9 +75,15 @@ class InterruptCoordinator:
         """是否检测到打断信号。"""
         return self._interrupted
 
+    @property
+    def handoff_chunks(self) -> tuple[np.ndarray, ...]:
+        """触发打断时截取的短预滚（按录音时间顺序）。"""
+        return self._handoff_chunks
+
     def reset(self) -> None:
         """开始新一轮监听前重置状态。"""
         self._interrupted = False
+        self._handoff_chunks = ()
         self._vad.reset()
 
     # ------------------------------------------------------------------
@@ -84,6 +96,7 @@ class InterruptCoordinator:
         # 进入监听前清空 VAD 状态，避免 TTS 之前积压的尾音误判
         self._vad.reset()
         _LOG.debug("interrupt monitor started")
+        recent_chunks: deque[np.ndarray] = deque(maxlen=_HANDOFF_CHUNKS)
 
         try:
             while True:
@@ -93,8 +106,10 @@ class InterruptCoordinator:
                 except asyncio.TimeoutError:
                     continue
 
+                recent_chunks.append(chunk)
                 if self._vad.process_chunk_interrupt(chunk):
                     # 检测到打断：立即停止播放
+                    self._handoff_chunks = tuple(recent_chunks)
                     self._interrupted = True
                     _LOG.info("interrupt detected, stopping TTS playback")
                     self._player.stop()
@@ -108,8 +123,9 @@ class InterruptCoordinator:
     def drain_queue(audio_queue: "asyncio.Queue[np.ndarray]") -> int:
         """清空音频队列里剩余的音频块。
 
-        打断发生后调用：TTS 期间队列里可能还积压了带播报声音泄漏的音频块，
-        如果不清空，回到 LISTEN 后这些块会被 VAD 当成新语音处理，导致误触发。
+        仅用于外放模式：关闭打断时清理整段 TTS 泄漏；显式启用打断时，
+        为避免误判的回声进入 ASR，仍按旧行为丢弃队列。耳机模式打断
+        不可调用，否则会截断新指令。
 
         Returns:
             被丢弃的音频块数量（用于日志）。
@@ -127,3 +143,4 @@ class InterruptCoordinator:
 
 
 __all__ = ["InterruptCoordinator"]
+

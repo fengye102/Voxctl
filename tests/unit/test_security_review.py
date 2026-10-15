@@ -2,7 +2,7 @@
 
 集中验证本次安全修复的新分支，避免拆散到多个文件：
     - S1 file_ops 扩展名白名单 + .lnk 解析拒绝
-    - S2 app_control 完整路径匹配优先（避免误杀同名进程）
+    - S2 app_control 只按完整路径关闭（避免误杀同名进程）
     - S3 shell_runner allow_args=false 拒绝带 args 调用
     - C1 whitelist apps 键归一化存储与查询
     - H3 allow_open_any_app=true 时 apps 允许为空
@@ -345,11 +345,11 @@ class TestFileOpsExtensionWhitelist(unittest.TestCase):
 
 
 # ======================================================================
-# S2：AppController close_app 完整路径匹配优先
+# S2：AppController close_app 只按完整路径匹配
 # ======================================================================
 
 class TestAppControlClosePathMatching(unittest.TestCase):
-    """S2：close_app 优先按完整路径匹配，避免误杀同名不同路径进程。"""
+    """S2：close_app 只按完整路径匹配，避免误杀同名不同路径进程。"""
 
     def _make_controller(self, app_path: str) -> AppController:
         wl = Whitelist.from_config({
@@ -373,8 +373,7 @@ class TestAppControlClosePathMatching(unittest.TestCase):
         other_proc.exe.return_value = "C:\\Portable\\notepad.exe"
         other_proc.terminate = MagicMock()
 
-        # 注意：第一阶段匹配到一个进程后 terminated_pids 非空，
-        # 不会进入第二阶段文件名匹配，所以 other_proc 不应被杀
+        # 只按完整路径匹配，所以 other_proc 不应被杀
         with patch("executor.app_control.psutil.process_iter",
                    return_value=[matching_proc, other_proc]):
             result = controller.close_app(
@@ -388,9 +387,8 @@ class TestAppControlClosePathMatching(unittest.TestCase):
         matching_proc.terminate.assert_called_once()
         other_proc.terminate.assert_not_called()
 
-    def test_falls_back_to_filename_match_when_full_path_unavailable(self):
-        """proc.exe() 全部 AccessDenied → 完整路径阶段无匹配，
-        降级到文件名匹配（杀掉所有同名进程）。"""
+    def test_does_not_match_filename_when_full_path_unavailable(self):
+        """proc.exe() 全部 AccessDenied 时不能仅凭同名结束进程。"""
         controller = self._make_controller("C:\\System\\notepad.exe")
 
         proc1 = MagicMock()
@@ -410,14 +408,13 @@ class TestAppControlClosePathMatching(unittest.TestCase):
             )
 
         self.assertTrue(result.success)
-        self.assertEqual(sorted(result.payload["terminated_pids"]), [100, 200])
-        # 修订 48 S2：降级到文件名匹配
-        self.assertEqual(result.payload["matched_via"], "name")
-        proc1.terminate.assert_called_once()
-        proc2.terminate.assert_called_once()
+        self.assertEqual(result.payload["terminated_pids"], [])
+        self.assertEqual(result.payload["matched_via"], "none")
+        proc1.terminate.assert_not_called()
+        proc2.terminate.assert_not_called()
 
-    def test_falls_back_to_filename_when_no_full_path_match(self):
-        """所有进程的完整路径都不匹配白名单 → 降级文件名匹配。"""
+    def test_does_not_match_filename_when_full_path_differs(self):
+        """所有进程的完整路径不匹配白名单时，不能按同名结束。"""
         controller = self._make_controller("C:\\System\\notepad.exe")
 
         # 进程名匹配但路径不匹配（便携版 notepad）
@@ -432,11 +429,10 @@ class TestAppControlClosePathMatching(unittest.TestCase):
                 CloseAppIntent(app_name="notepad"), confirmed=True
             )
 
-        # 完整路径阶段未匹配到，降级文件名阶段匹配并杀掉
         self.assertTrue(result.success)
-        self.assertEqual(result.payload["terminated_pids"], [100])
-        self.assertEqual(result.payload["matched_via"], "name")
-        proc.terminate.assert_called_once()
+        self.assertEqual(result.payload["terminated_pids"], [])
+        self.assertEqual(result.payload["matched_via"], "none")
+        proc.terminate.assert_not_called()
 
     def test_returns_success_when_no_process_running(self):
         """没有任何进程匹配 → 返回 success=True（应用本来就没开）。"""
@@ -457,3 +453,4 @@ class TestAppControlClosePathMatching(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+

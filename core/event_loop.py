@@ -18,6 +18,7 @@ import contextlib
 import logging
 import sys
 import time
+from collections import deque
 from pathlib import Path
 from typing import Optional
 
@@ -112,6 +113,8 @@ class MainLoop:
 
         self._state = LoopState()
         self._audio_queue: asyncio.Queue[np.ndarray] = asyncio.Queue()
+        # 打断监视器已消费的新句字头；须在实时队列之前交给 LISTEN。
+        self._handoff_audio: deque[np.ndarray] = deque()
         self._reminder_queue: asyncio.Queue[ExecutionResult] = asyncio.Queue()
         self._reminder_tasks: set[asyncio.Task] = set()
         self._loop: Optional[asyncio.AbstractEventLoop] = None
@@ -244,7 +247,7 @@ class MainLoop:
             self._state.transition(State.TTS)
             return
 
-        chunk = await self._audio_queue.get()
+        chunk = await self._next_audio_chunk()
         segment = self._vad.process_chunk(chunk, mode=VADMode.LISTEN)
 
         if segment is not None:
@@ -505,9 +508,10 @@ class MainLoop:
             2. await speak_result（被 player.stop() 打断会立即返回）
             3. cancel monitor 任务
             4. 如果检测到打断：
-               - drain_queue 清空带 TTS 泄漏的剩余音频块
+               - 耳机：保留短预滚和后续队列帧，作为同一句新指令移交 LISTEN
+               - 外放（显式开启打断）：清空队列，避免 TTS 回声进入 ASR
                - 如果 pending 存在（待二次确认），视为取消，清掉 pending
-               - VAD reset，回到 LISTEN
+               - VAD reset 后重放预滚，回到 LISTEN
             5. 如果正常播完：按原流程切状态（AWAIT_CONFIRM / LISTEN / 退出）
         """
         result = self._pending_result
@@ -606,11 +610,17 @@ class MainLoop:
         这里只是阻塞在音频队列上等下一句话，VAD 切片后切到 ASR。
         """
         # 和 _phase_listen 一样，只是状态标记不同（让 _handle_confirm_response 知道现在是确认阶段）
-        chunk = await self._audio_queue.get()
+        chunk = await self._next_audio_chunk()
         segment = self._vad.process_chunk(chunk, mode=VADMode.LISTEN)
         if segment is not None:
             self._pending_audio = segment
             self._state.transition(State.ASR)
+
+    async def _next_audio_chunk(self) -> np.ndarray:
+        """优先重放打断字头，再按时间顺序消费录音队列。"""
+        if self._handoff_audio:
+            return self._handoff_audio.popleft()
+        return await self._audio_queue.get()
 
     # ==================================================================
     # 本地提醒（修订 58）
@@ -661,7 +671,7 @@ class MainLoop:
     def _handle_tts_interrupt(self, result: ExecutionResult) -> None:
         """TTS 播报期间检测到打断后的清理逻辑。
 
-        - 清空队列中带 TTS 泄漏的音频块
+        - 耳机模式移交短预滚和后续音频；外放模式丢弃 TTS 回声
         - 如果有待确认操作，视为取消
         - 如果是退出播报被打断，视为用户反悔（§6 打断边界）
         - 写审计日志（§6 强制）
@@ -670,7 +680,13 @@ class MainLoop:
         _LOG.info("TTS 被打断，清理状态回到 LISTEN")
         print("[打断] 停止播报，准备听新指令")
 
-        drained = InterruptCoordinator.drain_queue(self._audio_queue)
+        if self._output_mode == OutputMode.HEADPHONE:
+            self._handoff_audio.extend(self._interrupt_coord.handoff_chunks)
+            # 耳机模式可可靠地区分回声；LISTEN 按序重放字头和后续队列。
+            drained = 0
+        else:
+            # 外放即使显式启用打断，也不能把高概率 TTS 泄漏送入 ASR。
+            drained = InterruptCoordinator.drain_queue(self._audio_queue)
         self._vad.reset()
 
         cancelled_pending = None
@@ -827,3 +843,4 @@ class MainLoop:
 
 
 __all__ = ["MainLoop", "MainLoopError"]
+
